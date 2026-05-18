@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -eu
+
+_src="${BASH_SOURCE[0]}"
+while [[ -L "$_src" ]]; do
+  _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+  _src="$(readlink "$_src")"
+  [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
+unset _src _dir
+# shellcheck source=../libexec/_workenv-lib.sh
+source "$SCRIPT_DIR/../libexec/_workenv-lib.sh"
+
+workenv_parse_flags "$@"
+project_arg="${WORKENV_POSITIONAL[0]:-$PWD}"
+if [[ -d "$project_arg" ]]; then
+  project="$(cd "$project_arg" && pwd)"
+  files=( "${WORKENV_POSITIONAL[@]:1}" )
+else
+  project="$PWD"
+  files=( "${WORKENV_POSITIONAL[@]}" )
+fi
+workenv_load_config "$project"
+WORKENV_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+workenv_maybe_rebuild "$WORKENV_REPO_ROOT"
+workenv_maybe_rebuild_project "$project"
+
+name="$(workenv_ensure_container "$project")"
+
+# Translate host paths under the project into container paths.
+nvim_args=()
+for a in "${files[@]+"${files[@]}"}"; do
+  if [[ -e "$a" ]]; then
+    abs="$(cd "$(dirname "$a")" && pwd)/$(basename "$a")"
+    if [[ "$abs" == "$project"* ]]; then
+      nvim_args+=("/workspace${abs#$project}")
+    else
+      nvim_args+=("$a")
+    fi
+  else
+    nvim_args+=("$a")
+  fi
+done
+
+workenv_exec "$name" /usr/local/bin/nvim "${nvim_args[@]}"

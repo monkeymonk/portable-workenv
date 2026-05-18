@@ -1,0 +1,58 @@
+# config/zsh/zshrc
+
+# Point oh-my-zsh at the shared installation
+export ZSH="/opt/oh-my-zsh"
+
+# Custom dir in user-writable state; copy plugin symlinks if needed
+export ZSH_CUSTOM="$XDG_CONFIG_HOME/zsh/custom"
+mkdir -p "$ZSH_CUSTOM/plugins"
+for p in zsh-autosuggestions zsh-syntax-highlighting zsh-vi-mode; do
+  [[ -L "$ZSH_CUSTOM/plugins/$p" ]] || ln -sf "/opt/oh-my-zsh/custom/plugins/$p" "$ZSH_CUSTOM/plugins/$p"
+done
+
+# History in persistent state
+export HISTFILE="$XDG_STATE_HOME/zsh/.zsh_history"
+export HISTSIZE=50000
+export SAVEHIST=50000
+setopt HIST_IGNORE_DUPS HIST_IGNORE_SPACE SHARE_HISTORY
+
+# Theme and plugins
+ZSH_THEME="robbyrussell"
+plugins=(
+  git
+  docker
+  docker-compose
+  ssh
+  tmux
+  command-not-found
+  common-aliases
+  cp
+  rsync
+  zoxide
+  zsh-autosuggestions
+  zsh-syntax-highlighting
+  zsh-vi-mode
+)
+
+source "$ZSH/oh-my-zsh.sh"
+
+# Aliases
+alias vi="nvim"
+alias vim="nvim"
+alias cat="bat --style=plain --paging=never"
+
+# FZF catppuccin mocha
+export FZF_DEFAULT_OPTS=" \
+--color=bg+:#313244,bg:#1e1e2e,spinner:#f5e0dc,hl:#f38ba8 \
+--color=fg:#cdd6f4,header:#f38ba8,info:#cba6f7,pointer:#f5e0dc \
+--color=marker:#b4befe,fg+:#cdd6f4,prompt:#cba6f7,hl+:#f38ba8 \
+--color=selected-bg:#45475a \
+--multi"
+
+# zoxide init
+eval "$(zoxide init zsh)"
+
+# mise activation
+if command -v mise >/dev/null 2>&1; then
+  eval "$(mise activate zsh)"
+fi

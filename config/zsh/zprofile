@@ -1,0 +1,2 @@
+# config/zsh/zprofile — sourced for login shells before zshrc
+# Minimal; entrypoint already exported the needed env.

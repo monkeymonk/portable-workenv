@@ -1,0 +1,13 @@
+# Example mise.toml for a project
+[tools]
+node = "lts"
+# python = "3.12"
+# go = "1.23"
+# rust = "stable"
+
+[tasks.dev]
+run = "npm run dev"
+description = "Start dev server"
+
+[tasks.test]
+run = "npm test"

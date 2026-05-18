@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# workenv notify-send shim.
+set -eu
+
+SOCK="${WORKENV_RELAY_SOCK_IN:-/run/host-relay/open.sock}"
+msg="${*:-}"
+
+if [[ -z "$msg" ]]; then
+  echo "notify-send: missing message" >&2
+  exit 2
+fi
+
+if [[ ! -S "$SOCK" ]]; then
+  echo "notify-send: relay socket $SOCK not available ($msg)" >&2
+  exit 0
+fi
+
+printf 'notify %s\n' "$msg" | socat - UNIX-CONNECT:"$SOCK" || {
+  echo "notify-send: relay send failed" >&2
+  exit 1
+}

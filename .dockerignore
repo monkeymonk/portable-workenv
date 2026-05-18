@@ -1,0 +1,11 @@
+.git
+.gitignore
+docs/
+tests/
+share/examples/
+_backup/
+bin/*.ps1
+*.md
+.DS_Store
+install.sh
+uninstall.sh

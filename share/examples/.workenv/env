@@ -1,0 +1,21 @@
+# .workenv/env — per-project workenv overrides (gitignore the .workenv/ dir).
+# All vars are optional.
+
+# Mount the Docker socket inside the container
+# WORKENV_DOCKER=true
+
+# Mount ~/.ssh read-only (fallback for when agent forwarding isn't available)
+# WORKENV_SSH_KEYS=true
+
+# Extra bind mounts (space-separated)
+# WORKENV_EXTRA_MOUNTS="/home/me/shared-libs /home/me/scratch"
+
+# Environment variables to pass through. Values with "=" are literal; names
+# without "=" copy the current host/config value.
+# WORKENV_ENV="GITHUB_TOKEN FOO=bar"
+
+# Stable project container name. Without this, workenv uses basename + path hash.
+# WORKENV_NAME="my-project"
+
+# Path to a host nvim config dir to overlay over the bundled defaults
+# WORKENV_NVIM_CONFIG="$HOME/.config/nvim"

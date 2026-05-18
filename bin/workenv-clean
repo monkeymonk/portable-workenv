@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Remove stopped workenv-* containers and dangling workenv image tags.
+set -eu
+
+echo "-- stopped workenv-* containers --"
+stopped=$(docker ps -a --filter "name=^workenv-" --filter "status=exited" --format '{{.Names}}')
+if [[ -z "$stopped" ]]; then
+  echo "(none)"
+else
+  while IFS= read -r c; do
+    [[ -n "$c" ]] && docker rm -f "$c"
+  done <<< "$stopped"
+fi
+
+echo "-- dangling images --"
+dangling=$(docker images -f dangling=true -q)
+if [[ -z "$dangling" ]]; then
+  echo "(none)"
+else
+  while IFS= read -r img; do
+    [[ -n "$img" ]] && docker rmi "$img"
+  done <<< "$dangling"
+fi
+
+echo "done."

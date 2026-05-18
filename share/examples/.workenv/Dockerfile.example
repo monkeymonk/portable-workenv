@@ -1,0 +1,34 @@
+# .workenv/Dockerfile — per-project image extension.
+#
+# Rename this file to `Dockerfile` to activate. The launcher will detect it,
+# build a derived image tagged `workenv:<project>`, and run the project's
+# container from that image instead of the base `workenv:latest`.
+#
+# Build context is the project root (the launcher does
+# `docker build -f .workenv/Dockerfile .`), so COPY paths are relative to
+# the project, not to .workenv/. Add a project-level .dockerignore to keep
+# the context small.
+
+FROM workenv:latest
+
+USER root
+
+# Example: add system packages
+# RUN apt-get update \
+#  && apt-get install -y --no-install-recommends \
+#       postgresql-client \
+#       redis-tools \
+#  && rm -rf /var/lib/apt/lists/*
+
+# Example: install a CLI from a release tarball
+# ARG GH_VERSION=2.50.0
+# RUN curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+#   | tar xz -C /tmp \
+#   && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh \
+#   && rm -rf /tmp/gh_*
+
+# Example: pin a Python version via mise (per-project alternative: drop a
+# mise.toml in the project root — mise picks it up automatically).
+# RUN mise use --global python@3.12
+
+USER dev

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -eu
+
+_src="${BASH_SOURCE[0]}"
+while [[ -L "$_src" ]]; do
+  _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+  _src="$(readlink "$_src")"
+  [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
+unset _src _dir
+# shellcheck source=../libexec/_workenv-lib.sh
+source "$SCRIPT_DIR/../libexec/_workenv-lib.sh"
+
+workenv_parse_flags "$@"
+project="${WORKENV_POSITIONAL[0]:-$PWD}"
+project="$(cd "$project" && pwd)"
+workenv_load_config "$project"
+WORKENV_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+workenv_maybe_rebuild "$WORKENV_REPO_ROOT"
+workenv_maybe_rebuild_project "$project"
+
+name="$(workenv_ensure_container "$project")"
+session="${name#workenv-}"
+workenv_exec "$name" /usr/bin/tmux new-session -A -s "$session"
