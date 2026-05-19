@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Legacy alias: equivalent to `workenv stop`. Kept for backward compatibility;
+# opt-in during install.sh.
 set -eu
 
 _src="${BASH_SOURCE[0]}"
@@ -9,36 +11,5 @@ while [[ -L "$_src" ]]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
 unset _src _dir
-# shellcheck source=../libexec/_workenv-lib.sh
-source "$SCRIPT_DIR/../libexec/_workenv-lib.sh"
 
-if [[ "${1:-}" == "--all" ]]; then
-  names=()
-  while IFS= read -r n; do
-    names+=("$n")
-  done < <(docker ps --filter "name=^workenv-" --format '{{.Names}}')
-  if [[ ${#names[@]} -eq 0 ]]; then
-    echo "workenv-stop: no workenv-* containers running"
-    exit 0
-  fi
-  for n in "${names[@]}"; do
-    echo "stopping $n"
-    docker stop "$n" >/dev/null
-  done
-  exit 0
-fi
-
-project="${1:-$PWD}"
-if [[ -d "$project" ]]; then
-  project="$(cd "$project" && pwd)"
-  name="$(workenv_container_name "$project")"
-else
-  name="workenv-${project#workenv-}"
-fi
-
-if docker ps --format '{{.Names}}' | grep -qx "$name"; then
-  echo "stopping $name"
-  docker stop "$name" >/dev/null
-else
-  echo "workenv-stop: $name is not running"
-fi
+exec "$SCRIPT_DIR/workenv" stop "$@"

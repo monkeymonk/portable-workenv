@@ -6,7 +6,7 @@ A portable, Docker-based terminal development environment packaging Neovim 0.12,
 
 workenv is a self-contained development workspace that isolates your editor, shell, multiplexer, and language runtimes inside a Docker container while keeping your project files on the host via bind mounts. It ships with a curated Neovim configuration (27 plugin specs), oh-my-zsh with 13 plugins, tmux with session persistence, and a runtime manager (mise) -- all wired together with XDG-compliant paths and a shared Docker volume.
 
-The goal: run `shellc ~/my-project` and land in a fully configured workspace with LSP, completion, formatters, debugger, Git integration, and clipboard passthrough -- on any machine with Docker.
+The goal: run `workenv shell ~/my-project` and land in a fully configured workspace with LSP, completion, formatters, debugger, Git integration, and clipboard passthrough -- on any machine with Docker.
 
 ## What's inside
 
@@ -56,14 +56,46 @@ All persistent state lives in a single Docker volume (`workenv-root`). Plugins, 
 
 The entrypoint seeds default configs into the volume on first run using `cp -an` (no-clobber), so user edits are preserved across image rebuilds.
 
+## Requirements (host)
+
+Install these on the host **before** running `install.sh`. The installer prints
+a warning for each missing one but won't fail.
+
+| Tool    | Why                                                                | Install                                                          |
+|---------|--------------------------------------------------------------------|------------------------------------------------------------------|
+| `docker` | Builds and runs the image                                          | distro pkg / Docker Desktop                                      |
+| `git`    | Used by `install.sh` (remote mode) and inside the container        | distro pkg                                                       |
+| `socat`  | **Required for clipboard paste and `xdg-open`/`notify-send` from the container.** Without it, Neovim falls back to OSC 52 copy-only and host-aware shims don't reach the host. | `sudo pacman -S socat` / `sudo apt install socat` / `brew install socat` |
+
+The container itself bundles its own `socat`, ripgrep, fd, fzf, bat, etc. — you
+only need the three above on the host.
+
 ## Quick start
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/monkeymonk/portable-workenv/main/install.sh | bash
-shellc ~/my-project                          # first run builds the image
+workenv shell ~/my-project                   # first run builds the image
 ```
 
-The installer clones the repo to `~/.local/share/workenv`, symlinks the launchers into `~/.local/bin/`, and (with your confirmation) appends a PATH block to your shell rc files (bash, zsh, fish). Re-run `install.sh` to update.
+The installer clones the repo to `~/.local/share/workenv`, symlinks the `workenv`
+and `workenv-relay.sh` launchers into `~/.local/bin/`, prompts before adding the
+legacy short aliases (`shellc`, `tmuxc`, `nvimc`, `workenv-stop`, `workenv-clean`),
+and (with your confirmation) appends a PATH block to your shell rc files
+(bash, zsh, fish). Re-run `install.sh` to update.
+
+### Local (in-place) install
+
+If you've already cloned or forked the repo and want to develop against it
+directly, just run the installer from inside the source tree:
+
+```bash
+bash /path/to/portable-workenv/install.sh
+```
+
+The installer detects the source tree, skips the clone, and symlinks the
+launchers straight to the working copy. A `.workenv-local-install` marker is
+written so `uninstall.sh` won't `rm -rf` your working tree. Every future edit
+in the source is immediately live — no re-deploy.
 
 To audit before running:
 
@@ -80,27 +112,39 @@ To uninstall:
 bash ~/.local/share/workenv/uninstall.sh
 ```
 
-First launch of `shellc` builds the Docker image (~5 min) and seeds the volume. Subsequent launches are instant.
+First launch of `workenv shell` builds the Docker image (~5 min) and seeds the volume. Subsequent launches are instant.
 
 ## Launchers
 
+Everything is one binary: `workenv <subcommand> [opts] [args]`. Subcommands share
+the same flag interface and lifecycle — they create the container on first use,
+then `exec` into it on subsequent calls.
+
 | Command | What it does |
 |---------|-------------|
-| `shellc [dir]` | Interactive zsh session in the project container |
-| `tmuxc [dir]` | tmux session with resurrect/continuum persistence |
-| `nvimc [dir] [files...]` | Neovim with host→container path translation |
-
-All launchers share the same flag interface and lifecycle: they create the container on first use, then `exec` into it on subsequent calls.
+| `workenv shell [dir]`              | Interactive zsh session in the project container |
+| `workenv tmux  [dir]`              | tmux session with resurrect/continuum persistence |
+| `workenv edit  [dir] [files...]`   | Neovim with host→container path translation |
+| `workenv stop  [name\|dir\|--all]` | Stop project container(s) |
+| `workenv clean`                    | Remove stopped `workenv-*` containers + dangling images |
+| `workenv restart [dir]`            | Force-recreate the project container |
+| `workenv help`                     | Show usage |
 
 ```bash
-nvimc ~/my-project src/main.lua    # opens /workspace/src/main.lua inside container
-tmuxc ~/my-project                 # attaches to tmux session "my-project"
-shellc ~/my-project                # drops into zsh at /workspace
+workenv edit  ~/my-project src/main.lua  # opens /workspace/src/main.lua inside container
+workenv tmux  ~/my-project               # attaches to tmux session "my-project"
+workenv shell ~/my-project               # drops into zsh at /workspace
 ```
+
+### Legacy short aliases (opt-in)
+
+`shellc`, `tmuxc`, `nvimc`, `workenv-stop`, and `workenv-clean` are thin shims
+over the subcommands above. `install.sh` will ask whether to symlink them; if
+you prefer typing less, accept. They behave identically to `workenv <subcmd>`.
 
 ## Flags
 
-All launchers accept these flags before the project directory:
+All subcommands accept these flags before the project directory:
 
 ```
 --ssh-keys           Mount ~/.ssh read-only (fallback when agent forwarding fails)
@@ -110,6 +154,8 @@ All launchers accept these flags before the project directory:
 --override-config    Mount a custom nvim config directory
 --name <name>        Override container name (default: workenv-<basename>-<hash>)
 --rebuild            Force image rebuild regardless of Dockerfile hash
+--force-restart      Recreate the container on spec drift without prompting
+--no-restart         Refuse to recreate on spec drift (exits with an error)
 ```
 
 ## Configuration
@@ -186,17 +232,36 @@ For overrides that aren't per-project: `--override-config <path>` flag, or
 ## Container lifecycle
 
 ```
-shellc ~/proj        # 1st call: docker run -d (creates workenv-proj-<hash>)
-shellc ~/proj        # 2nd call: docker exec   (reuses workenv-proj-<hash>)
+workenv shell ~/proj   # 1st call: docker run -d (creates workenv-proj-<hash>)
+workenv shell ~/proj   # 2nd call: docker exec   (reuses workenv-proj-<hash>)
 # Container stops or disappears → next call recreates it
 # Volume persists across container recreation
 ```
 
-The container runs `sleep infinity` as its entrypoint PID. Each `shellc`/`tmuxc`/`nvimc` call does `docker exec` with the real entrypoint, which sets up the environment and execs the requested tool.
+The container runs `sleep infinity` as its entrypoint PID. Each `workenv` call
+does `docker exec` with the real entrypoint, which sets up the environment and
+execs the requested tool.
 
-If the image, project path, mounts, config overlays, or forwarded environment
-change, the launcher recreates the project container automatically so runtime
-settings match the current command.
+### Spec drift and recreation
+
+If the image, mounts, or forwarded environment differ from what the running
+container was started with, the launcher prints a diff and asks whether to
+recreate the container. Recreation kills anything running inside (tmux
+sessions, dev servers, debuggers).
+
+```
+workenv: container workenv-proj-a1b2c3d4 has drifted from current spec:
+  + mount: /home/me/extra:/extra/extra
+  + env: GITHUB_TOKEN
+workenv: recreate workenv-proj-a1b2c3d4? running processes inside will be killed [y/N]
+```
+
+Override the prompt:
+
+- `--force-restart` — recreate without asking
+- `--no-restart` — refuse to recreate (exits with an error if drift exists)
+- `WORKENV_AUTO_RESTART=yes|no` — the same, non-interactively (useful in scripts)
+- `workenv restart [dir]` — explicit recreate, no prompt
 
 ### Auto-rebuild
 
@@ -205,9 +270,10 @@ Launchers track a SHA-256 hash of the Dockerfile. If it changes, the image rebui
 ## Management
 
 ```bash
-workenv-stop ~/proj      # stop a specific project's container
-workenv-stop --all       # stop all workenv-* containers
-workenv-clean            # remove stopped containers + dangling images
+workenv stop ~/proj        # stop a specific project's container
+workenv stop --all         # stop all workenv-* containers
+workenv clean              # remove stopped containers + dangling images
+workenv restart ~/proj     # force-recreate the project container
 ```
 
 ## Multi-project
@@ -215,8 +281,8 @@ workenv-clean            # remove stopped containers + dangling images
 Each project gets its own container (`workenv-<sanitized-basename>-<path-hash>`), but all share the `workenv-root` volume. Install a runtime in one project and it's immediately available in all others.
 
 ```bash
-shellc ~/work/api        # terminal 1 → workenv-api
-shellc ~/work/frontend   # terminal 2 → workenv-frontend
+workenv shell ~/work/api        # terminal 1 → workenv-api
+workenv shell ~/work/frontend   # terminal 2 → workenv-frontend
 ```
 
 See [docs/multi-project.md](docs/multi-project.md) for details on shared state boundaries.
@@ -231,12 +297,19 @@ See [docs/multi-project.md](docs/multi-project.md) for details on shared state b
 automatically when set and are used as Docker build args. Use `--env NAME`,
 `--env NAME=value`, or `WORKENV_ENV` for other values.
 
-**Clipboard:** When the host relay is available, Neovim uses the native host
-clipboard (`wl-copy`/`xclip`/`pbcopy`/`clip.exe`) through the mounted relay
-socket. If the relay is unavailable, it falls back to OSC 52 copy-only
-passthrough through Neovim → tmux → host terminal.
+**Clipboard + host relay:** A small host daemon (`bin/workenv-relay.sh`) is
+auto-started by the launcher and provides the only path for bidirectional
+clipboard sharing between Neovim and the host, plus `xdg-open` and
+`notify-send` passthrough from inside the container. Each `workenv` call
+prints a one-line notice the first time it starts the daemon.
 
-**Host relay (optional):** Start `bin/workenv-relay.sh` on the host to enable `xdg-open` and `notify-send` passthrough from inside the container. Container shims (sourced from `share/shims/`) detect the relay socket and degrade gracefully if unavailable.
+- **With the relay (default):** Neovim uses the host clipboard
+  (`wl-copy`/`xclip`/`pbcopy`/`clip.exe`) for both copy and paste.
+- **Without the relay:** Neovim falls back to OSC 52 copy-only passthrough
+  through tmux → host terminal — paste from host to Neovim does not work.
+
+Set `WORKENV_RELAY_AUTO_START=false` to disable auto-start (and accept the
+copy-only fallback).
 
 ## Platform support
 
@@ -252,8 +325,9 @@ See per-platform guides: [Linux](docs/linux.md) | [macOS](docs/macos.md) | [WSL2
 
 ```
 bin/
-  shellc, tmuxc, nvimc          # launchers (on PATH)
-  workenv-stop, workenv-clean   # management helpers
+  workenv                       # unified launcher (on PATH)
+  shellc, tmuxc, nvimc          # legacy aliases for workenv shell|tmux|edit (opt-in)
+  workenv-stop, workenv-clean   # legacy aliases for workenv stop|clean (opt-in)
   workenv-relay.sh              # host-side relay daemon
 config/                         # mirrors ~/.config — fork or symlink in place
   nvim/

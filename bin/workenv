@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+# Unified workenv launcher. Subcommands:
+#   workenv shell   [opts] [dir]              interactive zsh in the project container
+#   workenv tmux    [opts] [dir]              tmux session in the project container
+#   workenv edit    [opts] [dir] [files...]   nvim in the project container
+#   workenv stop    [name|dir|--all]          stop project container(s)
+#   workenv clean                             remove stopped workenv-* + dangling images
+#   workenv restart [opts] [dir]              force-recreate the project container
+#   workenv help                              show usage
+set -eu
+
+_src="${BASH_SOURCE[0]}"
+while [[ -L "$_src" ]]; do
+  _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+  _src="$(readlink "$_src")"
+  [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
+unset _src _dir
+
+# shellcheck source=../libexec/_workenv-lib.sh
+source "$SCRIPT_DIR/../libexec/_workenv-lib.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: workenv <subcommand> [options] [args]
+
+Subcommands:
+  shell [opts] [dir]              Interactive zsh in the project container
+  tmux  [opts] [dir]              tmux session (resurrect/continuum) in the project container
+  edit  [opts] [dir] [files...]   nvim in the project container (host->container path translation)
+  stop  [name|dir|--all]          Stop project container(s)
+  clean                           Remove stopped workenv-* containers + dangling images
+  restart [opts] [dir]            Force-recreate the project container
+  help                            Show this help
+
+Common options (before the project dir):
+  --ssh-keys           Mount ~/.ssh read-only
+  --docker             Mount /var/run/docker.sock
+  --mount <path>       Extra bind mount -> /extra/<basename>
+  --env <name|k=v>     Pass an environment variable into the container
+  --override-config    Mount a custom nvim config directory
+  --name <name>        Override container name
+  --rebuild            Force image rebuild regardless of Dockerfile hash
+  --force-restart      Recreate the container on spec drift without prompting
+  --no-restart         Refuse to recreate on spec drift (exits with error)
+
+Environment:
+  WORKENV_AUTO_RESTART=yes|no    Non-interactive answer to the drift prompt
+  WORKENV_RELAY_AUTO_START=false Don't auto-start the host clipboard/xdg-open relay
+
+Legacy aliases (opt-in via install.sh): shellc, tmuxc, nvimc, workenv-stop, workenv-clean
+EOF
+}
+
+_resolve_project_then_prepare() {
+  workenv_parse_flags "$@"
+  local arg="${WORKENV_POSITIONAL[0]:-$PWD}"
+  if [[ ! -d "$arg" ]]; then
+    echo "workenv: not a directory: $arg" >&2
+    exit 2
+  fi
+  WORKENV_PROJECT="$(cd "$arg" && pwd)"
+  workenv_load_config "$WORKENV_PROJECT"
+  WORKENV_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+  workenv_maybe_rebuild "$WORKENV_REPO_ROOT"
+  workenv_maybe_rebuild_project "$WORKENV_PROJECT"
+}
+
+cmd_shell() {
+  _resolve_project_then_prepare "$@"
+  local name
+  name="$(workenv_ensure_container "$WORKENV_PROJECT")"
+  workenv_exec "$name" /usr/bin/zsh
+}
+
+cmd_tmux() {
+  _resolve_project_then_prepare "$@"
+  local name session
+  name="$(workenv_ensure_container "$WORKENV_PROJECT")"
+  session="${name#workenv-}"
+  workenv_exec "$name" /usr/bin/tmux new-session -A -s "$session"
+}
+
+cmd_edit() {
+  workenv_parse_flags "$@"
+  local arg="${WORKENV_POSITIONAL[0]:-$PWD}"
+  local files=()
+  if [[ -d "$arg" ]]; then
+    WORKENV_PROJECT="$(cd "$arg" && pwd)"
+    files=( "${WORKENV_POSITIONAL[@]:1}" )
+  else
+    WORKENV_PROJECT="$PWD"
+    files=( "${WORKENV_POSITIONAL[@]}" )
+  fi
+  workenv_load_config "$WORKENV_PROJECT"
+  WORKENV_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+  workenv_maybe_rebuild "$WORKENV_REPO_ROOT"
+  workenv_maybe_rebuild_project "$WORKENV_PROJECT"
+
+  local name
+  name="$(workenv_ensure_container "$WORKENV_PROJECT")"
+
+  # Translate host paths under the project into container paths.
+  local nvim_args=() a abs
+  for a in "${files[@]+"${files[@]}"}"; do
+    if [[ -e "$a" ]]; then
+      abs="$(cd "$(dirname "$a")" && pwd)/$(basename "$a")"
+      if [[ "$abs" == "$WORKENV_PROJECT"* ]]; then
+        nvim_args+=("/workspace${abs#$WORKENV_PROJECT}")
+      else
+        nvim_args+=("$a")
+      fi
+    else
+      nvim_args+=("$a")
+    fi
+  done
+
+  workenv_exec "$name" /usr/local/bin/nvim "${nvim_args[@]+"${nvim_args[@]}"}"
+}
+
+cmd_restart() {
+  WORKENV_FLAG_FORCE_RESTART=true
+  _resolve_project_then_prepare "$@"
+  local name
+  name="$(workenv_container_name "$WORKENV_PROJECT")"
+  if workenv_container_exists "$name"; then
+    docker rm -f "$name" >/dev/null
+    echo "workenv: removed $name" >&2
+  fi
+  workenv_ensure_container "$WORKENV_PROJECT" >/dev/null
+  echo "workenv: $name running" >&2
+}
+
+cmd_stop() {
+  if [[ "${1:-}" == "--all" ]]; then
+    local n names=()
+    while IFS= read -r n; do
+      [[ -n "$n" ]] && names+=("$n")
+    done < <(docker ps --filter "name=^workenv-" --format '{{.Names}}')
+    if [[ ${#names[@]} -eq 0 ]]; then
+      echo "workenv: no workenv-* containers running"
+      return 0
+    fi
+    for n in "${names[@]}"; do
+      echo "stopping $n"
+      docker stop "$n" >/dev/null
+    done
+    return 0
+  fi
+
+  local arg="${1:-$PWD}" name
+  if [[ -d "$arg" ]]; then
+    arg="$(cd "$arg" && pwd)"
+    name="$(workenv_container_name "$arg")"
+  else
+    name="workenv-${arg#workenv-}"
+  fi
+  if docker ps --format '{{.Names}}' | grep -qx "$name"; then
+    echo "stopping $name"
+    docker stop "$name" >/dev/null
+  else
+    echo "workenv: $name is not running"
+  fi
+}
+
+cmd_clean() {
+  echo "-- stopped workenv-* containers --"
+  local stopped
+  stopped=$(docker ps -a --filter "name=^workenv-" --filter "status=exited" --format '{{.Names}}')
+  if [[ -z "$stopped" ]]; then
+    echo "(none)"
+  else
+    local c
+    while IFS= read -r c; do
+      [[ -n "$c" ]] && docker rm -f "$c"
+    done <<< "$stopped"
+  fi
+
+  echo "-- dangling images --"
+  local dangling
+  dangling=$(docker images -f dangling=true -q)
+  if [[ -z "$dangling" ]]; then
+    echo "(none)"
+  else
+    local img
+    while IFS= read -r img; do
+      [[ -n "$img" ]] && docker rmi "$img"
+    done <<< "$dangling"
+  fi
+
+  echo "done."
+}
+
+[[ $# -ge 1 ]] || { usage; exit 0; }
+subcmd="$1"; shift
+
+case "$subcmd" in
+  shell|sh)        cmd_shell "$@" ;;
+  tmux|t)          cmd_tmux "$@" ;;
+  edit|nvim|e)     cmd_edit "$@" ;;
+  restart)         cmd_restart "$@" ;;
+  stop)            cmd_stop "$@" ;;
+  clean)           cmd_clean "$@" ;;
+  help|-h|--help)  usage ;;
+  *)
+    printf 'workenv: unknown subcommand %q (try "workenv help")\n' "$subcmd" >&2
+    exit 2
+    ;;
+esac

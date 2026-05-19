@@ -1,25 +1,15 @@
 #!/usr/bin/env bash
-# Remove stopped workenv-* containers and dangling workenv image tags.
+# Legacy alias: equivalent to `workenv clean`. Kept for backward compatibility;
+# opt-in during install.sh.
 set -eu
 
-echo "-- stopped workenv-* containers --"
-stopped=$(docker ps -a --filter "name=^workenv-" --filter "status=exited" --format '{{.Names}}')
-if [[ -z "$stopped" ]]; then
-  echo "(none)"
-else
-  while IFS= read -r c; do
-    [[ -n "$c" ]] && docker rm -f "$c"
-  done <<< "$stopped"
-fi
+_src="${BASH_SOURCE[0]}"
+while [[ -L "$_src" ]]; do
+  _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+  _src="$(readlink "$_src")"
+  [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
+unset _src _dir
 
-echo "-- dangling images --"
-dangling=$(docker images -f dangling=true -q)
-if [[ -z "$dangling" ]]; then
-  echo "(none)"
-else
-  while IFS= read -r img; do
-    [[ -n "$img" ]] && docker rmi "$img"
-  done <<< "$dangling"
-fi
-
-echo "done."
+exec "$SCRIPT_DIR/workenv" clean "$@"

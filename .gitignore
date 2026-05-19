@@ -15,3 +15,4 @@ Thumbs.db
 .portable-nvim
 .dotfiles
 .tests-image-built
+.workenv-local-install

@@ -8,10 +8,21 @@
 
 set -euo pipefail
 
+# If invoked from inside a local source-tree install (the .workenv-local-install
+# marker is present), default WORKENV_HOME to the script's directory so we
+# don't accidentally remove an unrelated remote install at ~/.local/share/workenv.
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+  _UNINSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ -f "$_UNINSTALL_DIR/.workenv-local-install" && -z "${WORKENV_HOME:-}" ]]; then
+    WORKENV_HOME="$_UNINSTALL_DIR"
+  fi
+  unset _UNINSTALL_DIR
+fi
+
 : "${WORKENV_HOME:=$HOME/.local/share/workenv}"
 : "${WORKENV_BIN:=$HOME/.local/bin}"
 
-LAUNCHERS=(shellc tmuxc nvimc workenv-stop workenv-clean workenv-relay.sh)
+LAUNCHERS=(workenv workenv-relay.sh shellc tmuxc nvimc workenv-stop workenv-clean)
 MARKER_START='# >>> workenv path >>>'
 MARKER_END='# <<< workenv path <<<'
 
@@ -56,6 +67,11 @@ remove_path_blocks() {
 }
 
 remove_install_dir() {
+  if [[ -f "$WORKENV_HOME/.workenv-local-install" ]]; then
+    log "skipped removing $WORKENV_HOME (local source install — managed by you, not install.sh)"
+    rm -f "$WORKENV_HOME/.workenv-local-install"
+    return 0
+  fi
   if [[ -d "$WORKENV_HOME" ]]; then
     rm -rf "$WORKENV_HOME"
     log "removed $WORKENV_HOME"

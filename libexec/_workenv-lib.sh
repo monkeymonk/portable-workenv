@@ -28,6 +28,8 @@ WORKENV_FLAG_ENVS=()
 WORKENV_FLAG_OVERRIDE_CONFIG=""
 WORKENV_FLAG_NAME=""
 WORKENV_FLAG_REBUILD=false
+WORKENV_FLAG_FORCE_RESTART=false
+WORKENV_FLAG_NO_RESTART=false
 WORKENV_POSITIONAL=()
 
 WORKENV_DEFAULT_ENV_PASSTHROUGH=(
@@ -116,6 +118,8 @@ workenv_parse_flags() {
         [[ $# -ge 2 ]] || { echo "missing value for --name" >&2; return 2; }
         WORKENV_FLAG_NAME="$2"; shift 2 ;;
       --rebuild)          WORKENV_FLAG_REBUILD=true; shift ;;
+      --force-restart)    WORKENV_FLAG_FORCE_RESTART=true; shift ;;
+      --no-restart)       WORKENV_FLAG_NO_RESTART=true; shift ;;
       --)                 shift; WORKENV_POSITIONAL+=("$@"); return 0 ;;
       -*)                 echo "unknown flag: $1" >&2; return 2 ;;
       *)                  WORKENV_POSITIONAL+=("$1"); shift ;;
@@ -279,25 +283,57 @@ workenv_maybe_start_relay() {
   [[ "${WORKENV_RELAY_AUTO_START:-true}" == "true" ]] || return 0
   [[ -n "${WORKENV_REPO_ROOT:-}" ]] || return 0
   [[ -x "$WORKENV_REPO_ROOT/bin/workenv-relay.sh" ]] || return 0
-  command -v socat >/dev/null 2>&1 || return 0
+
+  if ! command -v socat >/dev/null 2>&1; then
+    if [[ -z "${_WORKENV_RELAY_SOCAT_WARNED:-}" ]]; then
+      cat >&2 <<'EOF'
+workenv: 'socat' not found on host — host relay disabled.
+  Without the relay, Neovim falls back to OSC 52 copy-only (paste from host won't work),
+  and xdg-open / notify-send from inside the container won't reach the host.
+  Install:
+    Arch:          sudo pacman -S socat
+    Debian/Ubuntu: sudo apt install socat
+    macOS:         brew install socat
+  Then run 'workenv restart' to remount the relay socket.
+  Silence this with WORKENV_RELAY_AUTO_START=false.
+EOF
+      export _WORKENV_RELAY_SOCAT_WARNED=1
+    fi
+    return 0
+  fi
 
   local relay_sock
   relay_sock="$(workenv_relay_socket)"
   [[ -S "$relay_sock" ]] && return 0
 
   nohup "$WORKENV_REPO_ROOT/bin/workenv-relay.sh" >/dev/null 2>&1 &
+  local relay_pid=$!
   local _
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [[ -S "$relay_sock" ]] && return 0
+    if [[ -S "$relay_sock" ]]; then
+      echo "workenv: started host relay (pid $relay_pid, $relay_sock) for clipboard + xdg-open. Set WORKENV_RELAY_AUTO_START=false to disable." >&2
+      return 0
+    fi
     sleep 0.1
   done
+  echo "workenv: relay daemon did not produce a socket at $relay_sock within 1s" >&2
 }
 
 WORKENV_RUN_MOUNTS=()
 WORKENV_RUN_ENVS=()
+WORKENV_RUN_MOUNT_SPECS=()
+WORKENV_RUN_ENV_SPECS=()
 WORKENV_RUN_LABELS=()
 WORKENV_RUN_IMAGE=""
+WORKENV_RUN_IMAGE_ID=""
 WORKENV_RUN_SPEC_HASH=""
+
+workenv_add_mount() {
+  local spec="$1"
+  [[ -n "$spec" ]] || return 0
+  WORKENV_RUN_MOUNTS+=( -v "$spec" )
+  WORKENV_RUN_MOUNT_SPECS+=( "$spec" )
+}
 
 workenv_add_env_arg() {
   local item="$1" key value
@@ -311,6 +347,7 @@ workenv_add_env_arg() {
       return 1
     fi
     WORKENV_RUN_ENVS+=( -e "$key=$value" )
+    WORKENV_RUN_ENV_SPECS+=( "$key=$value" )
   else
     key="$item"
     if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
@@ -319,18 +356,33 @@ workenv_add_env_arg() {
     fi
     if [[ -n "${!key+x}" ]]; then
       WORKENV_RUN_ENVS+=( -e "$key=${!key}" )
+      WORKENV_RUN_ENV_SPECS+=( "$key=${!key}" )
     fi
   fi
+}
+
+workenv_b64encode() {
+  if [[ $# -eq 0 ]]; then
+    printf '' | base64 | tr -d '\n'
+  else
+    printf '%s\n' "$@" | base64 | tr -d '\n'
+  fi
+}
+
+workenv_b64decode() {
+  printf '%s' "$1" | base64 -d 2>/dev/null || true
 }
 
 workenv_prepare_runtime() {
   local name="$1" project="$2"
 
-  WORKENV_RUN_MOUNTS=(
-    -v "$WORKENV_VOLUME":/home/dev/.local/share/workenv-root
-    -v "$project":/workspace
-  )
+  WORKENV_RUN_MOUNTS=()
   WORKENV_RUN_ENVS=()
+  WORKENV_RUN_MOUNT_SPECS=()
+  WORKENV_RUN_ENV_SPECS=()
+
+  workenv_add_mount "$WORKENV_VOLUME:/home/dev/.local/share/workenv-root"
+  workenv_add_mount "$project:/workspace"
 
   # Pass common proxy variables automatically, then any explicit allowlist or
   # KEY=value assignments from --env, WORKENV_ENV, or WORKENV_ENV_VARS.
@@ -341,30 +393,30 @@ workenv_prepare_runtime() {
 
   # SSH agent forwarding (auto)
   if [[ -n "${SSH_AUTH_SOCK:-}" ]] && [[ -S "$SSH_AUTH_SOCK" ]]; then
-    WORKENV_RUN_MOUNTS+=( -v "$SSH_AUTH_SOCK":/run/host-ssh/agent.sock )
+    workenv_add_mount "$SSH_AUTH_SOCK:/run/host-ssh/agent.sock"
   fi
 
   # --ssh-keys: mount ~/.ssh read-only
   if [[ "$WORKENV_FLAG_SSH_KEYS" == "true" ]] && [[ -d "$HOME/.ssh" ]]; then
-    WORKENV_RUN_MOUNTS+=( -v "$HOME/.ssh":/home/dev/.ssh:ro )
+    workenv_add_mount "$HOME/.ssh:/home/dev/.ssh:ro"
   fi
 
   # Auto-mount ~/.gitconfig read-only
   if [[ -f "$HOME/.gitconfig" ]]; then
-    WORKENV_RUN_MOUNTS+=( -v "$HOME/.gitconfig":/home/dev/.gitconfig:ro )
+    workenv_add_mount "$HOME/.gitconfig:/home/dev/.gitconfig:ro"
   fi
 
   # Auto-mount ssh config + known_hosts read-only (even without --ssh-keys)
   if [[ -f "$HOME/.ssh/config" ]]; then
-    WORKENV_RUN_MOUNTS+=( -v "$HOME/.ssh/config":/home/dev/.ssh/config:ro )
+    workenv_add_mount "$HOME/.ssh/config:/home/dev/.ssh/config:ro"
   fi
   if [[ -f "$HOME/.ssh/known_hosts" ]]; then
-    WORKENV_RUN_MOUNTS+=( -v "$HOME/.ssh/known_hosts":/home/dev/.ssh/known_hosts:ro )
+    workenv_add_mount "$HOME/.ssh/known_hosts:/home/dev/.ssh/known_hosts:ro"
   fi
 
   # --docker: mount docker socket
   if [[ "$WORKENV_FLAG_DOCKER" == "true" ]] && [[ -S /var/run/docker.sock ]]; then
-    WORKENV_RUN_MOUNTS+=( -v /var/run/docker.sock:/var/run/docker.sock )
+    workenv_add_mount "/var/run/docker.sock:/var/run/docker.sock"
   fi
 
   # Host relay socket (if daemon is running)
@@ -372,7 +424,7 @@ workenv_prepare_runtime() {
   local relay_sock
   relay_sock="$(workenv_relay_socket)"
   if [[ -S "$relay_sock" ]]; then
-    WORKENV_RUN_MOUNTS+=( -v "$relay_sock":/run/host-relay/open.sock )
+    workenv_add_mount "$relay_sock:/run/host-relay/open.sock"
   fi
 
   # --mount <path>: extra bind mounts
@@ -381,12 +433,12 @@ workenv_prepare_runtime() {
     [[ -n "$m" ]] || continue
     local base
     base="$(basename "$m")"
-    WORKENV_RUN_MOUNTS+=( -v "$m":/extra/"$base" )
+    workenv_add_mount "$m:/extra/$base"
   done
 
   # --override-config <path>: mount user's nvim config (explicit opt-in)
   if [[ -n "$WORKENV_FLAG_OVERRIDE_CONFIG" ]]; then
-    WORKENV_RUN_MOUNTS+=( -v "$WORKENV_FLAG_OVERRIDE_CONFIG":/home/dev/.local/share/workenv-root/config/nvim:ro )
+    workenv_add_mount "$WORKENV_FLAG_OVERRIDE_CONFIG:/home/dev/.local/share/workenv-root/config/nvim:ro"
   fi
 
   # Per-project config overlays at .workenv/config/<app>/ — replace volume's defaults
@@ -394,29 +446,101 @@ workenv_prepare_runtime() {
     local app
     for app in nvim tmux zsh; do
       if [[ -d "$project/.workenv/config/$app" ]]; then
-        WORKENV_RUN_MOUNTS+=( -v "$project/.workenv/config/$app":"/home/dev/.local/share/workenv-root/config/$app":ro )
+        workenv_add_mount "$project/.workenv/config/$app:/home/dev/.local/share/workenv-root/config/$app:ro"
       fi
     done
   fi
 
   WORKENV_RUN_IMAGE="$(workenv_project_image "$project")"
+  WORKENV_RUN_IMAGE_ID="$(docker image inspect -f '{{.Id}}' "$WORKENV_RUN_IMAGE" 2>/dev/null || printf '%s' "$WORKENV_RUN_IMAGE")"
 
-  local spec image_id
-  image_id="$(docker image inspect -f '{{.Id}}' "$WORKENV_RUN_IMAGE" 2>/dev/null || printf '%s' "$WORKENV_RUN_IMAGE")"
-  spec="$name"$'\n'"$project"$'\n'"$WORKENV_RUN_IMAGE"$'\n'"$image_id"$'\n'
-  spec+="mounts:${WORKENV_RUN_MOUNTS[*]}"$'\n'
-  spec+="env:${WORKENV_RUN_ENVS[*]}"$'\n'
-  WORKENV_RUN_SPEC_HASH="$(workenv_sha256_text "$spec")"
+  local mounts_b64 envs_b64
+  mounts_b64="$(workenv_b64encode "${WORKENV_RUN_MOUNT_SPECS[@]}")"
+  envs_b64="$(workenv_b64encode "${WORKENV_RUN_ENV_SPECS[@]}")"
+  WORKENV_RUN_SPEC_HASH="$(workenv_sha256_text "$WORKENV_RUN_IMAGE_ID|$mounts_b64|$envs_b64")"
+
   WORKENV_RUN_LABELS=(
     --label "workenv.managed=true"
     --label "workenv.project=$project"
     --label "workenv.spec=$WORKENV_RUN_SPEC_HASH"
+    --label "workenv.image_id=$WORKENV_RUN_IMAGE_ID"
+    --label "workenv.mounts.b64=$mounts_b64"
+    --label "workenv.envs.b64=$envs_b64"
   )
 }
 
 workenv_container_spec() {
   local name="$1"
   docker inspect -f '{{ index .Config.Labels "workenv.spec" }}' "$name" 2>/dev/null || true
+}
+
+workenv_container_label() {
+  local name="$1" key="$2" out
+  out="$(docker inspect -f "{{ index .Config.Labels \"$key\" }}" "$name" 2>/dev/null || true)"
+  [[ "$out" == "<no value>" ]] && out=""
+  printf '%s' "$out"
+}
+
+# Print a human-readable diff between the running container's stored runtime
+# spec and the freshly computed WORKENV_RUN_* values. Output lines go to stderr.
+workenv_print_spec_diff() {
+  local name="$1"
+  local old_image_id old_mounts_b64 old_envs_b64
+  old_image_id="$(workenv_container_label "$name" workenv.image_id)"
+  old_mounts_b64="$(workenv_container_label "$name" workenv.mounts.b64)"
+  old_envs_b64="$(workenv_container_label "$name" workenv.envs.b64)"
+
+  if [[ -z "$old_image_id" && -z "$old_mounts_b64" && -z "$old_envs_b64" ]]; then
+    echo "  (container predates spec labels; full diff unavailable)" >&2
+    return 0
+  fi
+
+  if [[ "$old_image_id" != "$WORKENV_RUN_IMAGE_ID" ]]; then
+    printf '  image: %s -> %s\n' "${old_image_id:-<none>}" "$WORKENV_RUN_IMAGE_ID" >&2
+  fi
+
+  local old_mounts new_mounts line
+  old_mounts="$(workenv_b64decode "$old_mounts_b64")"
+  new_mounts="$(printf '%s\n' "${WORKENV_RUN_MOUNT_SPECS[@]}")"
+  if [[ "$old_mounts" != "$new_mounts" ]]; then
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      grep -qxF -- "$line" <<< "$new_mounts" || printf '  - mount: %s\n' "$line" >&2
+    done <<< "$old_mounts"
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      grep -qxF -- "$line" <<< "$old_mounts" || printf '  + mount: %s\n' "$line" >&2
+    done <<< "$new_mounts"
+  fi
+
+  local old_envs new_envs
+  old_envs="$(workenv_b64decode "$old_envs_b64")"
+  new_envs="$(printf '%s\n' "${WORKENV_RUN_ENV_SPECS[@]}")"
+  if [[ "$old_envs" != "$new_envs" ]]; then
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      grep -qxF -- "$line" <<< "$new_envs" || printf '  - env: %s\n' "${line%%=*}" >&2
+    done <<< "$old_envs"
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      grep -qxF -- "$line" <<< "$old_envs" || printf '  + env: %s\n' "${line%%=*}" >&2
+    done <<< "$new_envs"
+  fi
+}
+
+# Prompt y/N on /dev/tty. Default no. Returns 0=yes, 1=no, 2=no tty available.
+workenv_confirm_tty() {
+  local prompt="$1" reply
+  if ! { exec 3</dev/tty; } 2>/dev/null; then
+    return 2
+  fi
+  printf '%s ' "$prompt" >&2
+  IFS= read -r reply <&3 || reply=""
+  exec 3<&-
+  case "$reply" in
+    y|Y|yes|YES) return 0 ;;
+    *)           return 1 ;;
+  esac
 }
 
 # Start a new workenv container in detached mode.
@@ -441,6 +565,21 @@ workenv_exec() {
   docker exec -it "$name" /usr/local/bin/entrypoint.sh "$@"
 }
 
+# Resolve drift action. Echoes one of: yes | no | prompt.
+workenv_drift_decision() {
+  if [[ "$WORKENV_FLAG_FORCE_RESTART" == "true" ]]; then
+    printf 'yes\n'; return
+  fi
+  if [[ "$WORKENV_FLAG_NO_RESTART" == "true" ]]; then
+    printf 'no\n'; return
+  fi
+  case "${WORKENV_AUTO_RESTART:-}" in
+    yes|true|1)  printf 'yes\n'; return ;;
+    no|false|0)  printf 'no\n'; return ;;
+  esac
+  printf 'prompt\n'
+}
+
 # Ensure container for this project is running; start if needed.
 # Echoes the container name.
 workenv_ensure_container() {
@@ -452,9 +591,29 @@ workenv_ensure_container() {
     local current_spec
     current_spec="$(workenv_container_spec "$name")"
     if [[ "$current_spec" != "$WORKENV_RUN_SPEC_HASH" ]]; then
-      echo "workenv: recreating $name because image, mounts, or env changed" >&2
-      docker rm -f "$name" >/dev/null
-      workenv_start_container "$name" "$project"
+      echo "workenv: container $name has drifted from current spec:" >&2
+      workenv_print_spec_diff "$name"
+      local decision
+      decision="$(workenv_drift_decision)"
+      if [[ "$decision" == "prompt" ]]; then
+        if workenv_confirm_tty "workenv: recreate $name? running processes inside will be killed [y/N]"; then
+          decision="yes"
+        else
+          local rc=$?
+          if [[ $rc -eq 2 ]]; then
+            echo "workenv: no tty for prompt; refusing to recreate. Use --force-restart, --no-restart, or set WORKENV_AUTO_RESTART={yes,no}." >&2
+            return 1
+          fi
+          decision="no"
+        fi
+      fi
+      if [[ "$decision" == "yes" ]]; then
+        echo "workenv: recreating $name" >&2
+        docker rm -f "$name" >/dev/null
+        workenv_start_container "$name" "$project"
+      else
+        echo "workenv: keeping existing $name (spec drift retained; run 'workenv restart' to apply)" >&2
+      fi
     fi
   elif workenv_container_exists "$name"; then
     docker rm -f "$name" >/dev/null
