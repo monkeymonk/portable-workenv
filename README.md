@@ -4,7 +4,7 @@ A portable, Docker-based terminal development environment packaging Neovim 0.12,
 
 ## What it is
 
-workenv is a self-contained development workspace that isolates your editor, shell, multiplexer, and language runtimes inside a Docker container while keeping your project files on the host via bind mounts. It ships with a curated Neovim configuration (27 plugin specs), oh-my-zsh with 13 plugins, tmux with session persistence, and a runtime manager (mise) -- all wired together with XDG-compliant paths and a shared Docker volume.
+workenv is a self-contained development workspace that isolates your editor, shell, multiplexer, and language runtimes inside a Docker container while keeping your project files on the host via bind mounts. It ships with a curated Neovim configuration (27 plugin spec files; ~39 underlying repos), oh-my-zsh with 13 plugins, tmux with session persistence, and a runtime manager (mise) -- all wired together with XDG-compliant paths and a shared Docker volume.
 
 The goal: run `workenv shell ~/my-project` and land in a fully configured workspace with LSP, completion, formatters, debugger, Git integration, and clipboard passthrough -- on any machine with Docker.
 
@@ -20,7 +20,7 @@ The goal: run `workenv shell ~/my-project` and land in a fully configured worksp
 | **Runtimes** | mise + Node LTS 22.11 pre-baked; Mason for LSP servers, formatters, linters |
 | **Theme** | Catppuccin Mocha across Neovim, tmux, fzf, and bat |
 
-### Neovim plugins (27 specs)
+### Neovim plugins (27 spec files)
 
 **Core:** catppuccin, lualine, snacks (dashboard/picker/explorer/notifier/indent), which-key, noice
 
@@ -125,7 +125,7 @@ then `exec` into it on subsequent calls.
 | `workenv shell [dir]`              | Interactive zsh session in the project container |
 | `workenv tmux  [dir]`              | tmux session with resurrect/continuum persistence |
 | `workenv edit  [dir] [files...]`   | Neovim with host→container path translation |
-| `workenv stop  [name\|dir\|--all]` | Stop project container(s) |
+| `workenv stop  [name\|dir\|--all]` | Stop project container(s) by path, full name, or basename prefix |
 | `workenv clean`                    | Remove stopped `workenv-*` containers + dangling images |
 | `workenv restart [dir]`            | Force-recreate the project container |
 | `workenv help`                     | Show usage |
@@ -212,7 +212,10 @@ USER dev
 ```
 
 Build context is the **project root**, so `COPY ./pyproject.toml /app/`
-works. Add a `.dockerignore` to keep it small. The launcher tracks the
+works. Add a `.dockerignore` to keep it small — the launcher warns once
+per project when the context exceeds ~100 MB and neither
+`./.dockerignore` nor `./.workenv/.dockerignore` is present (tune the
+threshold with `WORKENV_DOCKERIGNORE_WARN_MB`). The launcher tracks the
 Dockerfile's SHA-256; rebuilds happen automatically on change. Force one
 with `--rebuild`.
 
@@ -310,6 +313,12 @@ prints a one-line notice the first time it starts the daemon.
 
 Set `WORKENV_RELAY_AUTO_START=false` to disable auto-start (and accept the
 copy-only fallback).
+
+The relay sanitises what it forwards: `open` accepts only the URL schemes
+listed in `WORKENV_RELAY_OPEN_SCHEMES` (default `http,https,mailto`), and
+`notify` passes the message to the host notifier as a single argv element so
+container-side strings never reach a shell. Newlines in either argument are
+rejected by the container shims.
 
 ## Platform support
 

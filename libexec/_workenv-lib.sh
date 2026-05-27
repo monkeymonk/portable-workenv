@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared helpers for workenv launcher scripts.
-# Sourced by bin/shellc, bin/tmuxc, bin/nvimc.
-set -eu
+# Sourced by bin/workenv (and its legacy shims).
+set -euo pipefail
 
 WORKENV_IMAGE="${WORKENV_IMAGE:-workenv:latest}"
 WORKENV_VOLUME="${WORKENV_VOLUME:-workenv-root}"
@@ -66,6 +66,9 @@ workenv_sha256_text() {
 workenv_sanitize_name() {
   local raw="$1" name
   name="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g; s/^-*//; s/-*$//; s/--*/-/g')"
+  # "project" is a defence-in-depth fallback when sanitization strips
+  # everything. Distinct paths that both collapse to it are still
+  # disambiguated by the path-hash suffix appended in workenv_container_name.
   printf '%s\n' "${name:-project}"
 }
 
@@ -205,11 +208,44 @@ workenv_maybe_rebuild_project() {
     rebuild=true
   fi
   if [[ "$rebuild" == "true" ]]; then
+    workenv_warn_dockerignore "$project" "$img"
     echo "workenv: building project image $img ..." >&2
     workenv_prepare_proxy_build_args
     workenv_docker_build "${WORKENV_BUILD_ARGS[@]}" -f "$project/.workenv/Dockerfile" -t "$img" "$project"
     printf '%s' "$current" > "$stamp"
   fi
+}
+
+# Warn (once per project) if the build context is large and no .dockerignore
+# is present. The project root IS the build context, so an unignored
+# node_modules / venv / build artifact dir balloons the upload.
+workenv_warn_dockerignore() {
+  local project="$1" img="$2"
+  [[ -e "$project/.dockerignore" || -e "$project/.workenv/.dockerignore" ]] && return 0
+
+  local threshold_mb="${WORKENV_DOCKERIGNORE_WARN_MB:-100}"
+  local size_bytes=""
+  size_bytes="$(du -sb "$project" 2>/dev/null | awk '{print $1}')" || return 0
+  [[ -n "$size_bytes" ]] || return 0
+  local threshold_bytes=$(( threshold_mb * 1024 * 1024 ))
+  (( size_bytes > threshold_bytes )) || return 0
+
+  local stamp_dir="${XDG_DATA_HOME:-$HOME/.local/share}/workenv"
+  mkdir -p "$stamp_dir"
+  local hash sentinel
+  hash="$(workenv_sha256_text "$project")"
+  sentinel="$stamp_dir/.dockerignore-warned.${hash:0:16}"
+  [[ -f "$sentinel" ]] && return 0
+
+  local size_mb=$(( size_bytes / 1024 / 1024 ))
+  cat >&2 <<EOF
+workenv: project build context for $img is ${size_mb} MB (threshold ${threshold_mb} MB)
+  and no .dockerignore is present. Docker uploads the entire context to the
+  daemon on every build. Consider adding $project/.dockerignore (or
+  $project/.workenv/.dockerignore) to exclude node_modules, target/, .venv/,
+  build artifacts, etc. Tune the threshold via WORKENV_DOCKERIGNORE_WARN_MB.
+EOF
+  : > "$sentinel"
 }
 
 workenv_maybe_rebuild() {
@@ -386,8 +422,10 @@ workenv_prepare_runtime() {
 
   # Pass common proxy variables automatically, then any explicit allowlist or
   # KEY=value assignments from --env, WORKENV_ENV, or WORKENV_ENV_VARS.
+  # Use the +"${arr[@]}" idiom so an empty array does NOT expand to a single
+  # empty string (which would poison the spec hash via b64encode).
   local e
-  for e in "${WORKENV_DEFAULT_ENV_PASSTHROUGH[@]}" "${WORKENV_FLAG_ENVS[@]:-}"; do
+  for e in "${WORKENV_DEFAULT_ENV_PASSTHROUGH[@]}" "${WORKENV_FLAG_ENVS[@]+"${WORKENV_FLAG_ENVS[@]}"}"; do
     workenv_add_env_arg "$e"
   done
 
@@ -429,7 +467,7 @@ workenv_prepare_runtime() {
 
   # --mount <path>: extra bind mounts
   local m
-  for m in "${WORKENV_FLAG_EXTRA_MOUNTS[@]:-}"; do
+  for m in "${WORKENV_FLAG_EXTRA_MOUNTS[@]+"${WORKENV_FLAG_EXTRA_MOUNTS[@]}"}"; do
     [[ -n "$m" ]] || continue
     local base
     base="$(basename "$m")"
@@ -565,19 +603,15 @@ workenv_exec() {
   docker exec -it "$name" /usr/local/bin/entrypoint.sh "$@"
 }
 
-# Resolve drift action. Echoes one of: yes | no | prompt.
+# Resolve drift action. Returns: 0 = yes, 1 = no, 2 = prompt the user.
 workenv_drift_decision() {
-  if [[ "$WORKENV_FLAG_FORCE_RESTART" == "true" ]]; then
-    printf 'yes\n'; return
-  fi
-  if [[ "$WORKENV_FLAG_NO_RESTART" == "true" ]]; then
-    printf 'no\n'; return
-  fi
+  if [[ "$WORKENV_FLAG_FORCE_RESTART" == "true" ]]; then return 0; fi
+  if [[ "$WORKENV_FLAG_NO_RESTART" == "true" ]]; then return 1; fi
   case "${WORKENV_AUTO_RESTART:-}" in
-    yes|true|1)  printf 'yes\n'; return ;;
-    no|false|0)  printf 'no\n'; return ;;
+    yes|true|1)  return 0 ;;
+    no|false|0)  return 1 ;;
   esac
-  printf 'prompt\n'
+  return 2
 }
 
 # Ensure container for this project is running; start if needed.
@@ -593,21 +627,21 @@ workenv_ensure_container() {
     if [[ "$current_spec" != "$WORKENV_RUN_SPEC_HASH" ]]; then
       echo "workenv: container $name has drifted from current spec:" >&2
       workenv_print_spec_diff "$name"
-      local decision
-      decision="$(workenv_drift_decision)"
-      if [[ "$decision" == "prompt" ]]; then
-        if workenv_confirm_tty "workenv: recreate $name? running processes inside will be killed [y/N]"; then
-          decision="yes"
-        else
-          local rc=$?
-          if [[ $rc -eq 2 ]]; then
+      local decision=0 rc=0
+      workenv_drift_decision || decision=$?
+      if [[ $decision -eq 2 ]]; then
+        rc=0
+        workenv_confirm_tty "workenv: recreate $name? running processes inside will be killed [y/N]" || rc=$?
+        case $rc in
+          0) decision=0 ;;
+          2)
             echo "workenv: no tty for prompt; refusing to recreate. Use --force-restart, --no-restart, or set WORKENV_AUTO_RESTART={yes,no}." >&2
             return 1
-          fi
-          decision="no"
-        fi
+            ;;
+          *) decision=1 ;;
+        esac
       fi
-      if [[ "$decision" == "yes" ]]; then
+      if [[ $decision -eq 0 ]]; then
         echo "workenv: recreating $name" >&2
         docker rm -f "$name" >/dev/null
         workenv_start_container "$name" "$project"

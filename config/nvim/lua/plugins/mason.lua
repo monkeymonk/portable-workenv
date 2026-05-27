@@ -50,7 +50,6 @@ return {
         run_on_start = true,
         start_delay = 1000,
       })
-      installer.run_on_start()
     end,
   },
   {

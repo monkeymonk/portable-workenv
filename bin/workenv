@@ -7,7 +7,7 @@
 #   workenv clean                             remove stopped workenv-* + dangling images
 #   workenv restart [opts] [dir]              force-recreate the project container
 #   workenv help                              show usage
-set -eu
+set -euo pipefail
 
 _src="${BASH_SOURCE[0]}"
 while [[ -L "$_src" ]]; do
@@ -101,12 +101,14 @@ cmd_edit() {
   local name
   name="$(workenv_ensure_container "$WORKENV_PROJECT")"
 
-  # Translate host paths under the project into container paths.
+  # Translate host paths under the project into container paths. Exact-or-subpath
+  # match only; otherwise siblings like /home/me/projector match a project at
+  # /home/me/proj and get rewritten to /workspace/ector/... .
   local nvim_args=() a abs
   for a in "${files[@]+"${files[@]}"}"; do
     if [[ -e "$a" ]]; then
       abs="$(cd "$(dirname "$a")" && pwd)/$(basename "$a")"
-      if [[ "$abs" == "$WORKENV_PROJECT"* ]]; then
+      if [[ "$abs" == "$WORKENV_PROJECT" || "$abs" == "$WORKENV_PROJECT"/* ]]; then
         nvim_args+=("/workspace${abs#$WORKENV_PROJECT}")
       else
         nvim_args+=("$a")
@@ -133,6 +135,11 @@ cmd_restart() {
 }
 
 cmd_stop() {
+  local strict=false
+  if [[ "${1:-}" == "--strict" ]]; then
+    strict=true; shift
+  fi
+
   if [[ "${1:-}" == "--all" ]]; then
     local n names=()
     while IFS= read -r n; do
@@ -153,15 +160,50 @@ cmd_stop() {
   if [[ -d "$arg" ]]; then
     arg="$(cd "$arg" && pwd)"
     name="$(workenv_container_name "$arg")"
-  else
-    name="workenv-${arg#workenv-}"
+    if docker ps --format '{{.Names}}' | grep -qx "$name"; then
+      echo "stopping $name"
+      docker stop "$name" >/dev/null
+    else
+      echo "workenv: $name is not running"
+    fi
+    return 0
   fi
-  if docker ps --format '{{.Names}}' | grep -qx "$name"; then
-    echo "stopping $name"
-    docker stop "$name" >/dev/null
-  else
-    echo "workenv: $name is not running"
+
+  # Bare name: resolve via docker ps. With --strict, require exact match;
+  # otherwise treat the arg as a basename prefix and match workenv-<arg>-*.
+  local stripped="${arg#workenv-}"
+  if [[ "$strict" == "true" ]]; then
+    name="workenv-$stripped"
+    if docker ps --format '{{.Names}}' | grep -qx "$name"; then
+      echo "stopping $name"
+      docker stop "$name" >/dev/null
+    else
+      echo "workenv: $name is not running"
+    fi
+    return 0
   fi
+
+  local matches=() m
+  while IFS= read -r m; do
+    [[ -n "$m" ]] && matches+=("$m")
+  done < <(docker ps --format '{{.Names}}' \
+            | grep -E "^workenv-${stripped}(-[0-9a-f]{8})?$" || true)
+
+  case "${#matches[@]}" in
+    0)
+      echo "workenv: no running container matches '$arg' (try --strict for exact-name match)"
+      return 1
+      ;;
+    1)
+      echo "stopping ${matches[0]}"
+      docker stop "${matches[0]}" >/dev/null
+      ;;
+    *)
+      echo "workenv: '$arg' matches multiple containers; disambiguate:"
+      printf '  %s\n' "${matches[@]}"
+      return 1
+      ;;
+  esac
 }
 
 cmd_clean() {

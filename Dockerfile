@@ -35,6 +35,7 @@ RUN apt-get update \
       python3-pip \
       python3-venv \
       shellcheck \
+      chafa \
  && rm -rf /var/lib/apt/lists/* \
  && sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
  && locale-gen
@@ -83,9 +84,7 @@ RUN set -eux; \
     gunzip -c /tmp/tree-sitter.gz > /usr/local/bin/tree-sitter; \
     chmod 0755 /usr/local/bin/tree-sitter; \
     rm /tmp/tree-sitter.gz; \
-    # chafa (from apt — versions are recent enough on bookworm)
-    cd /; rm -rf "$tmp"; \
-    apt-get update && apt-get install -y --no-install-recommends chafa && rm -rf /var/lib/apt/lists/*
+    cd /; rm -rf "$tmp"
 
 ARG NVIM_VERSION=v0.12.0
 

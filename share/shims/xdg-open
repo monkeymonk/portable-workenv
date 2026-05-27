@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # workenv xdg-open shim.
 # Sends "open <arg>\n" to the host relay socket; prints warning if unavailable.
-set -eu
+set -euo pipefail
 
 SOCK="${WORKENV_RELAY_SOCK_IN:-/run/host-relay/open.sock}"
 arg="${1:-}"
@@ -10,6 +10,16 @@ if [[ -z "$arg" ]]; then
   echo "xdg-open: missing argument" >&2
   exit 2
 fi
+
+# The relay's line protocol is one command per line. Newlines in the argument
+# would let a caller inject a second command (e.g. a forged notify or another
+# open). Reject them.
+case "$arg" in
+  *$'\n'*|*$'\r'*)
+    echo "xdg-open: newline in argument refused" >&2
+    exit 2
+    ;;
+esac
 
 if [[ ! -S "$SOCK" ]]; then
   echo "xdg-open: relay socket $SOCK not available (open \"$arg\" on host manually)" >&2

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Legacy alias: equivalent to `workenv shell`. Kept for backward compatibility;
 # opt-in during install.sh.
-set -eu
+set -euo pipefail
 
 _src="${BASH_SOURCE[0]}"
 while [[ -L "$_src" ]]; do
