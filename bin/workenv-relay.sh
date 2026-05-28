@@ -94,7 +94,11 @@ case "$(uname -s)" in
     : "${WORKENV_RELAY_NOTIFY_KIND:=argv}"
     ;;
   Darwin*)
-    : "${WORKENV_RELAY_SOCK:=${TMPDIR:-/tmp}workenv-relay.sock}"
+    # Standalone fallback only — the launcher exports WORKENV_RELAY_SOCK from
+    # workenv_relay_socket(). Strip any trailing slash ($TMPDIR ends in / on macOS).
+    if [[ -z "${WORKENV_RELAY_SOCK:-}" ]]; then
+      _wr_base="${TMPDIR:-/tmp}"; WORKENV_RELAY_SOCK="${_wr_base%/}/workenv-relay.sock"; unset _wr_base
+    fi
     : "${WORKENV_RELAY_OPENER:=open}"
     : "${WORKENV_RELAY_NOTIFIER:=__macos_osascript__}"
     : "${WORKENV_RELAY_NOTIFY_KIND:=macos}"

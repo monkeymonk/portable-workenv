@@ -24,7 +24,6 @@ plugins=(
   docker-compose
   ssh
   tmux
-  command-not-found
   common-aliases
   cp
   rsync
@@ -49,6 +48,14 @@ export FZF_DEFAULT_OPTS=" \
 --color=selected-bg:#45475a \
 --multi"
 
+# fzf: fd-backed listing + shell keybindings/completion (Ctrl-T, Ctrl-R, Alt-C)
+if command -v fzf >/dev/null 2>&1; then
+  export FZF_DEFAULT_COMMAND="fd --type f --hidden --strip-cwd-prefix --exclude .git"
+  export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
+  export FZF_ALT_C_COMMAND="fd --type d --hidden --strip-cwd-prefix --exclude .git"
+  source <(fzf --zsh)
+fi
+
 # zoxide init
 eval "$(zoxide init zsh)"
 
@@ -56,3 +63,8 @@ eval "$(zoxide init zsh)"
 if command -v mise >/dev/null 2>&1; then
   eval "$(mise activate zsh)"
 fi
+
+# Local tweak seam — user-owned, survives image rebuilds (gitignored). Put small
+# overrides here instead of forking this file; for a full replacement use
+# `--config zsh=<path>` / WORKENV_ZSH_CONFIG or .workenv/config/zsh/.
+[[ -r "$ZDOTDIR/.zshrc.local" ]] && source "$ZDOTDIR/.zshrc.local"

@@ -3,16 +3,8 @@ return {
   event = { "BufReadPost", "BufNewFile" },
   config = function()
     local lint = require("lint")
-    lint.linters_by_ft = {
-      javascript = { "eslint_d" },
-      typescript = { "eslint_d" },
-      typescriptreact = { "eslint_d" },
-      javascriptreact = { "eslint_d" },
-      markdown = { "markdownlint" },
-      yaml = { "yamllint" },
-      sh = { "shellcheck" },
-      bash = { "shellcheck" },
-    }
+    -- Linter map comes from config.tools (single source of truth).
+    lint.linters_by_ft = require("config.tools").linters_by_ft
 
     local group = vim.api.nvim_create_augroup("workenv_lint", { clear = true })
     vim.api.nvim_create_autocmd({ "BufEnter", "BufWritePost", "InsertLeave" }, {

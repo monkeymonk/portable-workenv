@@ -100,8 +100,9 @@ RUN set -eux; \
     mkdir -p /opt/nvim; \
     mv "nvim-${nvim_arch}"/* /opt/nvim/; \
     chown -R root:root /opt/nvim; \
-    ln -sf /opt/nvim/bin/nvim /usr/local/bin/nvim; \
     cd /; rm -rf "$tmp"
+# /usr/local/bin/nvim is a wrapper (not a symlink) that injects the baked core
+# package onto packpath — see the COPY of share/shims/nvim + share/nvim-core below.
 
 # oh-my-zsh + custom plugins at a shared location (read-only, shared across users)
 RUN set -eux; \
@@ -174,6 +175,15 @@ RUN mkdir -p /home/dev/.local/share/workenv-root/config/{nvim,tmux,zsh,mise} \
 COPY share/shims/xdg-open /usr/local/bin/xdg-open
 COPY share/shims/notify-send /usr/local/bin/notify-send
 RUN chmod 0755 /usr/local/bin/xdg-open /usr/local/bin/notify-send
+
+# Neovim "core" layer (always-on host integration) + the nvim wrapper that puts
+# it on packpath for any config. See share/nvim-core/ and share/shims/nvim.
+COPY share/nvim-core/ /opt/workenv/nvim-core/
+COPY share/shims/nvim /usr/local/bin/nvim
+RUN chmod 0755 /usr/local/bin/nvim && chown -R root:root /opt/workenv/nvim-core
+
+# tmux "core" layer: integration applied before the user's tmux.conf is sourced.
+COPY share/tmux-core.conf /opt/workenv/tmux-core.conf
 
 USER dev
 WORKDIR /workspace

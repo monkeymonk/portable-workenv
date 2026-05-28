@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# workenv nvim wrapper.
+#
+# Prepends the baked "core" package directory to packpath so the workenv
+# integration layer (host-relay clipboard + gx/open routing) loads for EVERY
+# nvim invocation — including when the user mounts their own ~/.config/nvim.
+# Core lives in the image (read-only), outside the swappable config dir, so a
+# config swap can't remove it. See share/nvim-core/.
+#
+# Opt out of the packpath injection entirely with WORKENV_NVIM_NO_CORE=1.
+set -euo pipefail
+
+NVIM_BIN="${WORKENV_NVIM_BIN:-/opt/nvim/bin/nvim}"
+CORE_DIR="${WORKENV_NVIM_CORE_DIR:-/opt/workenv/nvim-core}"
+
+if [[ "${WORKENV_NVIM_NO_CORE:-}" == "1" ]] || [[ ! -d "$CORE_DIR" ]]; then
+  exec "$NVIM_BIN" "$@"
+fi
+
+exec "$NVIM_BIN" --cmd "set packpath^=$CORE_DIR" "$@"

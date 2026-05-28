@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -eu
+set -euo pipefail
 
 # Workspace paths
 export WORKENV_ROOT="${WORKENV_ROOT:-/home/dev/.local/share/workenv-root}"

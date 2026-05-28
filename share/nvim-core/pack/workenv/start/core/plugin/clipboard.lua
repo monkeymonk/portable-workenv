@@ -1,3 +1,19 @@
+-- workenv core: host-relay clipboard integration.
+--
+-- This is the *core* (kernel) layer — baked into the image at
+-- /opt/workenv/nvim-core and placed on packpath by the nvim wrapper, so it
+-- loads for ANY config (ours, or a user's own mounted ~/.config/nvim). It runs
+-- as a start-package plugin (after init.lua), so a config can opt out with:
+--   vim.g.workenv_core_clipboard = false
+--
+-- With the relay socket present, copy/paste go through the host clipboard
+-- (wl-copy/xclip/pbcopy/clip.exe via bin/workenv-relay.sh). Without it, fall
+-- back to OSC 52 copy-only (paste from host can't work over OSC 52 reliably).
+
+if vim.g.workenv_core_clipboard == false then
+  return
+end
+
 local relay_sock = "/run/host-relay/open.sock"
 
 local function system(cmd, input)

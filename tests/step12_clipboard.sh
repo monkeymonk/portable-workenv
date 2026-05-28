@@ -50,7 +50,7 @@ else
   echo "SKIP: host relay clipboard test (socat not installed on host)"
 fi
 
-# Test 4: tmux passthrough enabled
-out=$(run_container grep -E 'allow-passthrough' /opt/workenv-defaults/tmux/tmux.conf)
+# Test 4: tmux passthrough enabled (now in the baked tmux core, not userland conf)
+out=$(run_container grep -E 'allow-passthrough' /opt/workenv/tmux-core.conf)
 assert_contains "$out" "on"
-pass "tmux allow-passthrough on"
+pass "tmux allow-passthrough on (in tmux-core.conf)"

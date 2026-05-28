@@ -151,7 +151,8 @@ All subcommands accept these flags before the project directory:
 --docker             Mount /var/run/docker.sock into container
 --mount <path>       Extra bind mount → /extra/<basename>
 --env <name|k=v>     Pass an environment variable into the container
---override-config    Mount a custom nvim config directory
+--config <app>=<path>  Mount your own config for an app (nvim|zsh|tmux), read-only
+--override-config <path>  Alias for --config nvim=<path>
 --name <name>        Override container name (default: workenv-<basename>-<hash>)
 --rebuild            Force image rebuild regardless of Dockerfile hash
 --force-restart      Recreate the container on spec drift without prompting
@@ -170,9 +171,29 @@ WORKENV_SSH_KEYS=true
 WORKENV_DOCKER=false
 WORKENV_EXTRA_MOUNTS="/home/me/shared-libs"
 WORKENV_ENV="GITHUB_TOKEN HTTPS_PROXY=http://proxy.example"
-WORKENV_NVIM_CONFIG="/home/me/my-nvim"
+WORKENV_NVIM_CONFIG="/home/me/.config/nvim"   # bring your own nvim config
+WORKENV_ZSH_CONFIG="/home/me/.config/zsh"     # bring your own zsh config
+WORKENV_TMUX_CONFIG="/home/me/.config/tmux"   # bring your own tmux config
 WORKENV_NAME="my-project"
 ```
+
+### Config layers: core, config, local
+
+Each app's config is composed in three layers, so you can run with our defaults,
+tweak them, or bring your own entirely — while host integration always works:
+
+- **core** — host integration (clipboard relay, `gx`/open routing, tmux
+  passthrough) baked into the image and loaded for *any* config, including your
+  own. The `nvim` wrapper injects it onto `packpath`; tmux is started with the
+  baked core conf which then sources your config. Opt out per-tool with
+  `vim.g.workenv_core_clipboard=false` / `vim.g.workenv_core_open=false`, or
+  disable the nvim injection with `WORKENV_NVIM_NO_CORE=1`.
+- **config** — the opinionated, swappable layer: ours by default, or bring your
+  own via `--config <app>=<path>` / `WORKENV_<APP>_CONFIG` / per-project
+  `.workenv/config/<app>/`. Host-global overrides beat per-project overlays.
+- **local** — small additive tweaks without forking, kept in the volume
+  (survive rebuilds, gitignore them): `lua/config/user.lua` (nvim, loaded last),
+  `$ZDOTDIR/.zshrc.local` (zsh), `tmux.local.conf` (tmux).
 
 ### Per-project: the `.workenv/` directory
 

@@ -1,35 +1,13 @@
 -- Global LSP setup. Called from plugins/mason.lua after mason-lspconfig.
+-- Server list + opts come from config.tools (single source of truth). Servers
+-- with needs_runtime (gopls/rust_analyzer) are configured here too — enabling a
+-- server with no installed binary is a quiet no-op, so they auto-activate once
+-- the user installs the runtime + server.
 local map = require("util.map").map
+local tools = require("config.tools")
 
-local servers = {
-  lua_ls = {
-    settings = {
-      Lua = {
-        workspace = { checkThirdParty = false },
-        telemetry = { enable = false },
-        diagnostics = { globals = { "vim" } },
-      },
-    },
-  },
-  ts_ls = {},
-  tailwindcss = {},
-  gopls = {},
-  rust_analyzer = {},
-  bashls = {},
-  pyright = {},
-  cssls = {},
-  html = {},
-  jsonls = {},
-  yamlls = {},
-  dockerls = {},
-  docker_compose_language_service = {},
-  emmet_ls = {
-    filetypes = { "html", "css", "sass", "scss", "less", "javascriptreact", "typescriptreact" },
-  },
-}
-
-for name, opts in pairs(servers) do
-  vim.lsp.config(name, opts)
+for name, spec in pairs(tools.servers) do
+  vim.lsp.config(name, spec.opts or {})
   vim.lsp.enable(name)
 end
 
@@ -43,9 +21,9 @@ vim.api.nvim_create_autocmd("LspAttach", {
     map("n", "gD", vim.lsp.buf.declaration, opts("Go to declaration"))
     map("n", "gi", vim.lsp.buf.implementation, opts("Go to implementation"))
     map("n", "gr", vim.lsp.buf.references, opts("Find references"))
-    map("n", "K", vim.lsp.buf.hover, opts("Hover"))
     map("n", "<leader>cr", vim.lsp.buf.rename, opts("Rename"))
     map({ "n", "v" }, "<leader>ca", vim.lsp.buf.code_action, opts("Code action"))
-    map("n", "<leader>cf", function() vim.lsp.buf.format({ async = true }) end, opts("Format"))
+    -- K (hover) is owned by lspsaga (plugins/lspsaga.lua); <leader>cf (format)
+    -- is owned by conform (plugins/conform.lua). Don't redefine them here.
   end,
 })

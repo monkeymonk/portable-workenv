@@ -25,7 +25,9 @@ WORKENV_FLAG_SSH_KEYS=false
 WORKENV_FLAG_DOCKER=false
 WORKENV_FLAG_EXTRA_MOUNTS=()
 WORKENV_FLAG_ENVS=()
-WORKENV_FLAG_OVERRIDE_CONFIG=""
+# Per-app host-global config overrides: app(nvim|zsh|tmux) -> host path.
+# Populated by --config <app>=<path>, --override-config, and WORKENV_<APP>_CONFIG.
+declare -A WORKENV_FLAG_CONFIG_OVERRIDES=()
 WORKENV_FLAG_NAME=""
 WORKENV_FLAG_REBUILD=false
 WORKENV_FLAG_FORCE_RESTART=false
@@ -72,6 +74,20 @@ workenv_sanitize_name() {
   printf '%s\n' "${name:-project}"
 }
 
+# Map an absolute host path to its container path under /workspace, IF it is the
+# project root or a path inside it. Otherwise echo the input unchanged.
+# Args: project_root  absolute_path
+# Exact-or-subpath match only — a bare prefix test would rewrite siblings like
+# /home/me/projector when the project is /home/me/proj (-> /workspace/ector/...).
+workenv_container_path() {
+  local project="$1" abs="$2"
+  if [[ "$abs" == "$project" || "$abs" == "$project"/* ]]; then
+    printf '%s\n' "/workspace${abs#"$project"}"
+  else
+    printf '%s\n' "$abs"
+  fi
+}
+
 WORKENV_BUILD_ARGS=()
 
 workenv_prepare_proxy_build_args() {
@@ -103,6 +119,16 @@ workenv_docker_build() {
   return "$rc"
 }
 
+# Register a host-global config override for one app (nvim|zsh|tmux).
+workenv_set_config_override() {
+  local app="$1" path="$2"
+  case "$app" in
+    nvim|zsh|tmux) ;;
+    *) echo "workenv: --config: unknown app '$app' (expected nvim|zsh|tmux)" >&2; return 2 ;;
+  esac
+  WORKENV_FLAG_CONFIG_OVERRIDES["$app"]="$path"
+}
+
 workenv_parse_flags() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -114,9 +140,16 @@ workenv_parse_flags() {
       --env)
         [[ $# -ge 2 ]] || { echo "missing value for --env" >&2; return 2; }
         WORKENV_FLAG_ENVS+=("$2"); shift 2 ;;
+      --config)
+        [[ $# -ge 2 ]] || { echo "missing value for --config (expected <app>=<path>)" >&2; return 2; }
+        case "$2" in
+          *=*) workenv_set_config_override "${2%%=*}" "${2#*=}" || return 2 ;;
+          *)   echo "workenv: --config expects <app>=<path>, got '$2'" >&2; return 2 ;;
+        esac
+        shift 2 ;;
       --override-config)
         [[ $# -ge 2 ]] || { echo "missing value for --override-config" >&2; return 2; }
-        WORKENV_FLAG_OVERRIDE_CONFIG="$2"; shift 2 ;;
+        workenv_set_config_override nvim "$2" || return 2; shift 2 ;;
       --name)
         [[ $# -ge 2 ]] || { echo "missing value for --name" >&2; return 2; }
         WORKENV_FLAG_NAME="$2"; shift 2 ;;
@@ -155,9 +188,15 @@ EOF
   if [[ "${WORKENV_DOCKER:-}" == "true" ]] && [[ "$WORKENV_FLAG_DOCKER" == "false" ]]; then
     WORKENV_FLAG_DOCKER=true
   fi
-  if [[ -n "${WORKENV_NVIM_CONFIG:-}" ]] && [[ -z "$WORKENV_FLAG_OVERRIDE_CONFIG" ]]; then
-    WORKENV_FLAG_OVERRIDE_CONFIG="$WORKENV_NVIM_CONFIG"
-  fi
+  # Host-global config overrides from env: WORKENV_{NVIM,ZSH,TMUX}_CONFIG.
+  # A --config/--override-config flag for the same app takes precedence.
+  local _app _envvar
+  for _app in nvim zsh tmux; do
+    _envvar="WORKENV_${_app^^}_CONFIG"
+    if [[ -n "${!_envvar:-}" ]] && [[ -z "${WORKENV_FLAG_CONFIG_OVERRIDES[$_app]:-}" ]]; then
+      WORKENV_FLAG_CONFIG_OVERRIDES["$_app"]="${!_envvar}"
+    fi
+  done
   if [[ -n "${WORKENV_NAME:-}" ]] && [[ -z "$WORKENV_FLAG_NAME" ]]; then
     WORKENV_FLAG_NAME="$WORKENV_NAME"
   fi
@@ -307,12 +346,18 @@ workenv_container_exists() {
   docker inspect "$name" >/dev/null 2>&1
 }
 
+# Authoritative host relay socket path. bin/workenv-relay.sh honours
+# WORKENV_RELAY_SOCK (which workenv_maybe_start_relay exports from here), so this
+# is the single source of truth when the launcher drives the daemon; the relay
+# script keeps an identical fallback for standalone (systemd) use.
 workenv_relay_socket() {
+  local base
   case "$WORKENV_PLATFORM" in
-    linux|wsl) printf '%s\n' "${XDG_RUNTIME_DIR:-/tmp}/workenv-relay.sock" ;;
-    macos)     printf '%s\n' "${TMPDIR:-/tmp}workenv-relay.sock" ;;
-    *)         printf '%s\n' "/tmp/workenv-relay.sock" ;;
+    linux|wsl) base="${XDG_RUNTIME_DIR:-/tmp}" ;;
+    macos)     base="${TMPDIR:-/tmp}" ;;
+    *)         base="/tmp" ;;
   esac
+  printf '%s\n' "${base%/}/workenv-relay.sock"
 }
 
 workenv_maybe_start_relay() {
@@ -342,7 +387,7 @@ EOF
   relay_sock="$(workenv_relay_socket)"
   [[ -S "$relay_sock" ]] && return 0
 
-  nohup "$WORKENV_REPO_ROOT/bin/workenv-relay.sh" >/dev/null 2>&1 &
+  WORKENV_RELAY_SOCK="$relay_sock" nohup "$WORKENV_REPO_ROOT/bin/workenv-relay.sh" >/dev/null 2>&1 &
   local relay_pid=$!
   local _
   for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -474,20 +519,20 @@ workenv_prepare_runtime() {
     workenv_add_mount "$m:/extra/$base"
   done
 
-  # --override-config <path>: mount user's nvim config (explicit opt-in)
-  if [[ -n "$WORKENV_FLAG_OVERRIDE_CONFIG" ]]; then
-    workenv_add_mount "$WORKENV_FLAG_OVERRIDE_CONFIG:/home/dev/.local/share/workenv-root/config/nvim:ro"
-  fi
-
-  # Per-project config overlays at .workenv/config/<app>/ — replace volume's defaults
-  if [[ -d "$project/.workenv/config" ]]; then
-    local app
-    for app in nvim tmux zsh; do
-      if [[ -d "$project/.workenv/config/$app" ]]; then
-        workenv_add_mount "$project/.workenv/config/$app:/home/dev/.local/share/workenv-root/config/$app:ro"
-      fi
-    done
-  fi
+  # Config overrides, one read-only mount per app over the volume's config/<app>.
+  # Precedence: host-global (--config <app>=, --override-config, WORKENV_<APP>_CONFIG)
+  # beats per-project .workenv/config/<app>/. Only one source mounts per app, so
+  # the two never collide on the same mount target.
+  local app src
+  for app in nvim zsh tmux; do
+    src=""
+    if [[ -n "${WORKENV_FLAG_CONFIG_OVERRIDES[$app]:-}" ]]; then
+      src="${WORKENV_FLAG_CONFIG_OVERRIDES[$app]}"
+    elif [[ -d "$project/.workenv/config/$app" ]]; then
+      src="$project/.workenv/config/$app"
+    fi
+    [[ -n "$src" ]] && workenv_add_mount "$src:/home/dev/.local/share/workenv-root/config/$app:ro"
+  done
 
   WORKENV_RUN_IMAGE="$(workenv_project_image "$project")"
   WORKENV_RUN_IMAGE_ID="$(docker image inspect -f '{{.Id}}' "$WORKENV_RUN_IMAGE" 2>/dev/null || printf '%s' "$WORKENV_RUN_IMAGE")"

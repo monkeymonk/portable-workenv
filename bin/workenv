@@ -29,7 +29,7 @@ Subcommands:
   shell [opts] [dir]              Interactive zsh in the project container
   tmux  [opts] [dir]              tmux session (resurrect/continuum) in the project container
   edit  [opts] [dir] [files...]   nvim in the project container (host->container path translation)
-  stop  [name|dir|--all]          Stop project container(s)
+  stop  [--strict] [name|dir|--all]  Stop project container(s) by path, full name, or basename prefix
   clean                           Remove stopped workenv-* containers + dangling images
   restart [opts] [dir]            Force-recreate the project container
   help                            Show this help
@@ -39,15 +39,20 @@ Common options (before the project dir):
   --docker             Mount /var/run/docker.sock
   --mount <path>       Extra bind mount -> /extra/<basename>
   --env <name|k=v>     Pass an environment variable into the container
-  --override-config    Mount a custom nvim config directory
+  --config <app>=<path>  Mount your own config for an app (nvim|zsh|tmux), read-only
+  --override-config <path>  Alias for --config nvim=<path>
   --name <name>        Override container name
   --rebuild            Force image rebuild regardless of Dockerfile hash
   --force-restart      Recreate the container on spec drift without prompting
   --no-restart         Refuse to recreate on spec drift (exits with error)
 
 Environment:
-  WORKENV_AUTO_RESTART=yes|no    Non-interactive answer to the drift prompt
-  WORKENV_RELAY_AUTO_START=false Don't auto-start the host clipboard/xdg-open relay
+  WORKENV_AUTO_RESTART=yes|no        Non-interactive answer to the drift prompt
+  WORKENV_RELAY_AUTO_START=false     Don't auto-start the host clipboard/xdg-open relay
+  WORKENV_RELAY_OPEN_SCHEMES=...     Comma-separated URL scheme allowlist for the relay
+                                     'open' command (default: http,https,mailto)
+  WORKENV_DOCKERIGNORE_WARN_MB=N     Warn when a project build context exceeds N MB
+                                     with no .dockerignore (default: 100)
 
 Legacy aliases (opt-in via install.sh): shellc, tmuxc, nvimc, workenv-stop, workenv-clean
 EOF
@@ -79,7 +84,10 @@ cmd_tmux() {
   local name session
   name="$(workenv_ensure_container "$WORKENV_PROJECT")"
   session="${name#workenv-}"
-  workenv_exec "$name" /usr/bin/tmux new-session -A -s "$session"
+  # -f loads the baked core conf first (terminal/passthrough integration); core
+  # then source-files the user's tmux.conf. Only effective on first server start
+  # per container; subsequent attaches reuse the running server.
+  workenv_exec "$name" /usr/bin/tmux -f /opt/workenv/tmux-core.conf new-session -A -s "$session"
 }
 
 cmd_edit() {
@@ -101,18 +109,14 @@ cmd_edit() {
   local name
   name="$(workenv_ensure_container "$WORKENV_PROJECT")"
 
-  # Translate host paths under the project into container paths. Exact-or-subpath
-  # match only; otherwise siblings like /home/me/projector match a project at
-  # /home/me/proj and get rewritten to /workspace/ector/... .
+  # Translate host paths under the project into container paths. Resolution of
+  # the absolute path stays here (filesystem-dependent); the prefix mapping is
+  # workenv_container_path (pure, unit-tested in tests/step16).
   local nvim_args=() a abs
   for a in "${files[@]+"${files[@]}"}"; do
     if [[ -e "$a" ]]; then
       abs="$(cd "$(dirname "$a")" && pwd)/$(basename "$a")"
-      if [[ "$abs" == "$WORKENV_PROJECT" || "$abs" == "$WORKENV_PROJECT"/* ]]; then
-        nvim_args+=("/workspace${abs#$WORKENV_PROJECT}")
-      else
-        nvim_args+=("$a")
-      fi
+      nvim_args+=("$(workenv_container_path "$WORKENV_PROJECT" "$abs")")
     else
       nvim_args+=("$a")
     fi

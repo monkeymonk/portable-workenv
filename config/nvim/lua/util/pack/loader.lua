@@ -20,6 +20,19 @@ local function run_config(spec)
   end
 end
 
+-- Wrap vim.pack.add so one broken clone/lock (e.g. a partial repo with no HEAD)
+-- doesn't abort the entire config load. Returns true on success; on failure it
+-- notifies (scheduled, since this can run during startup) and returns false.
+local function safe_pack_add(entries, opts, what)
+  local ok, err = pcall(vim.pack.add, entries, opts)
+  if not ok then
+    vim.schedule(function()
+      vim.notify(("pack: failed to add %s: %s"):format(what or "plugin", err), vim.log.levels.ERROR)
+    end)
+  end
+  return ok
+end
+
 local function load_dependencies(spec)
   if type(spec.dependencies) ~= "table" then return end
   for _, dep in ipairs(spec.dependencies) do
@@ -27,11 +40,10 @@ local function load_dependencies(spec)
       dep = { dep }
     end
     if type(dep) == "table" then
-      vim.pack.add({ plugin_entry(dep) }, { load = true })
-      run_config({
-        name = dep.name or (dep[1] or dep.src or "dependency"):match("([^/]+)%.git$") or (dep[1] or dep.src or "dependency"):match("([^/]+)$"),
-        config = dep.config,
-      })
+      local dep_name = dep.name or (dep[1] or dep.src or "dependency"):match("([^/]+)%.git$") or (dep[1] or dep.src or "dependency"):match("([^/]+)$")
+      if safe_pack_add({ plugin_entry(dep) }, { load = true }, dep_name) then
+        run_config({ name = dep_name, config = dep.config })
+      end
     end
   end
 end
@@ -45,8 +57,9 @@ function M.defer(spec)
     if loaded then return end
     loaded = true
     load_dependencies(spec)
-    vim.pack.add({ { src = spec.src, version = spec.version } }, { load = true })
-    run_config(spec)
+    if safe_pack_add({ { src = spec.src, version = spec.version } }, { load = true }, spec.name) then
+      run_config(spec)
+    end
   end
 
   if spec.event then
@@ -80,11 +93,20 @@ function M.defer(spec)
           end,
         })
       else
-        vim.api.nvim_create_user_command(c, function(args)
+        vim.api.nvim_create_user_command(c, function(a)
+          -- Replace this stub with the plugin's real command, then re-run it
+          -- preserving args/bang/range (the old "%s" string format dropped
+          -- those and broke on args containing %).
           pcall(vim.api.nvim_del_user_command, c)
           load_now()
-          vim.cmd((c .. " %s"):format(args.args or ""))
-        end, { nargs = "*" })
+          local cmd = { cmd = c, args = a.fargs, bang = a.bang }
+          if a.range == 2 then
+            cmd.range = { a.line1, a.line2 }
+          elseif a.range == 1 then
+            cmd.range = { a.line1 }
+          end
+          vim.cmd(cmd)
+        end, { nargs = "*", bang = true, range = true })
       end
     end
   end
@@ -106,12 +128,13 @@ function M.register(spec)
   if not (spec.event or spec.ft or spec.cmd or spec.keys) then
     -- Eager
     load_dependencies(spec)
-    vim.pack.add({ { src = spec.src, version = spec.version } }, { load = true })
-    run_config(spec)
+    if safe_pack_add({ { src = spec.src, version = spec.version } }, { load = true }, spec.name) then
+      run_config(spec)
+    end
     return true
   end
   -- Install now but load on trigger
-  vim.pack.add({ { src = spec.src, version = spec.version } }, { load = false })
+  safe_pack_add({ { src = spec.src, version = spec.version } }, { load = false }, spec.name)
   M.defer(spec)
   return false
 end
