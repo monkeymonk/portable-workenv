@@ -12,9 +12,18 @@
 curl -fsSL https://raw.githubusercontent.com/monkeymonk/portable-workenv/main/install.sh | bash
 ```
 
-This clones the repo to `~/.local/share/workenv`, symlinks launchers into
-`~/.local/bin/`, and (with your confirmation) appends a PATH block to your
-shell rc files. Re-run the installer to update.
+This clones the repo to `~/.local/share/workenv`, symlinks the `workenv`
+launcher into `~/.local/bin/`, and (with your confirmation) appends a PATH
+block to your shell rc files. Re-run the installer to update.
+
+A default install ships a single entry point, `workenv`, with subcommands:
+`workenv shell`, `workenv tmux`, `workenv edit`, `workenv stop`, and
+`workenv clean`. The installer also offers (via a y/N prompt) to symlink the
+legacy short-form aliases `shellc` / `tmuxc` / `nvimc` / `workenv-stop` /
+`workenv-clean`; these are thin opt-in shims that forward to the matching
+`workenv <subcommand>`. Unless you accept that prompt, only `workenv` is
+installed — the examples in these docs use the canonical `workenv <subcommand>`
+form.
 
 Override defaults with env vars before piping:
 
@@ -34,7 +43,7 @@ ln -sfn ~/.local/share/workenv/bin/* ~/.local/bin/
 ## First run
 
 ```bash
-shellc ~/some-project
+workenv shell ~/some-project
 ```
 
 Expect the first run to:
@@ -66,7 +75,12 @@ WORKENV_DOCKER=false
 WORKENV_EXTRA_MOUNTS=""
 WORKENV_ENV=""
 WORKENV_NVIM_CONFIG=""
+WORKENV_ZSH_CONFIG=""
+WORKENV_TMUX_CONFIG=""
 WORKENV_NAME=""
+# Warn once per project if a .workenv/Dockerfile build context exceeds this
+# many MB without a .dockerignore present (default 100).
+WORKENV_DOCKERIGNORE_WARN_MB=100
 ```
 
 `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` are forwarded automatically when
@@ -80,18 +94,53 @@ WORKENV_ENV="GITHUB_TOKEN FOO=bar"
 Entries without `=` copy the current value from the host/config shell. Entries
 with `=` pass that literal value.
 
-## Override the default nvim config
+## Config layers
 
-Pass `--override-config $HOME/.config/nvim` to the launcher (or set
-`WORKENV_NVIM_CONFIG=$HOME/.config/nvim` in `.workenv` / global config) and
-your host nvim config will be mounted read-only over the shipped defaults.
-The repo's `config/nvim/` mirrors `~/.config/nvim/` 1:1, so the same config
-works in both places.
+Each app's configuration is assembled from three layers:
+
+- **core** — host integration (clipboard relay, `gx`/open routing) baked into
+  the image. It is always loaded for *any* config, even one you bring yourself:
+  Neovim is launched through a wrapper that injects the baked core onto
+  `packpath`, and tmux is started with `-f /opt/workenv/tmux-core.conf`, which
+  then sources your config. So a foreign config still gets host clipboard +
+  open. Opt out per tool with `vim.g.workenv_core_clipboard = false` /
+  `vim.g.workenv_core_open = false` in your nvim config, or disable the nvim
+  core injection entirely with the env var `WORKENV_NVIM_NO_CORE=1`.
+- **config** — the swappable opinionated layer: ours by default, or bring your
+  own (see below).
+- **local** — small additive tweaks that don't require forking the config:
+  `lua/config/user.lua` (nvim, loaded last), `$ZDOTDIR/.zshrc.local` (zsh), and
+  `tmux.local.conf` (tmux). These live in the shared volume, survive image
+  rebuilds, and are yours to gitignore.
+
+## Bring your own config
+
+To replace the **config** layer for a single app, mount a host config
+directory read-only over that app's config:
+
+```bash
+workenv shell --config nvim=$HOME/.config/nvim
+workenv shell --config zsh=$HOME/.config/zsh
+workenv shell --config tmux=$HOME/.config/tmux
+```
+
+`--override-config <path>` remains an alias for `--config nvim=<path>`.
+
+The env equivalents are `WORKENV_NVIM_CONFIG`, `WORKENV_ZSH_CONFIG`, and
+`WORKENV_TMUX_CONFIG` (set them in `.workenv/env` or global config).
+
+The repo's `config/nvim/`, `config/zsh/`, and `config/tmux/` mirror
+`~/.config/<app>/` 1:1, so the same config works in both places. Because the
+**core** layer is baked into the image, a mounted foreign config still gets the
+host clipboard and open routing.
+
+A host-global override (flag or env) beats the per-project
+`.workenv/config/<app>/` overlay, which still exists and covers all three apps.
 
 ## Custom Docker image name
 
 ```bash
-WORKENV_IMAGE=myteam/workenv:2024-q4 shellc
+WORKENV_IMAGE=myteam/workenv:2024-q4 workenv shell
 ```
 
 ## Custom container name

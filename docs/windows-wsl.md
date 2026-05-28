@@ -31,8 +31,8 @@ Install the relay dependency:
 sudo apt-get install socat
 ```
 
-`shellc`, `tmuxc`, and `nvimc` auto-start `workenv-relay.sh` when `socat` is
-available.
+`workenv shell`, `workenv tmux`, and `workenv edit` auto-start
+`workenv-relay.sh` when `socat` is available.
 
 The shim uses `xdg-open` which WSL forwards to `wslview` → Windows default
 browser. Alternatively, set `WORKENV_RELAY_OPENER=wslview`.

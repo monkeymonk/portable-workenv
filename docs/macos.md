@@ -5,8 +5,9 @@
 https://docs.docker.com/desktop/install/mac-install/
 
 Enable:
-- "Use Docker Compose V2"
 - File sharing for `/Users`, `/tmp`, `/private`
+
+workenv does not use Docker Compose — only `docker run` / `docker exec`.
 
 ## UID/GID
 
@@ -34,8 +35,9 @@ Install the relay dependency:
 brew install socat
 ```
 
-`shellc`, `tmuxc`, and `nvimc` auto-start `workenv-relay.sh` when `socat` is
-available. macOS uses `pbcopy`/`pbpaste` for relay clipboard support.
+`workenv shell`, `workenv tmux`, and `workenv edit` auto-start
+`workenv-relay.sh` when `socat` is available. macOS uses `pbcopy`/`pbpaste`
+for relay clipboard support.
 
 LaunchAgent at `~/Library/LaunchAgents/com.workenv.relay.plist`:
 

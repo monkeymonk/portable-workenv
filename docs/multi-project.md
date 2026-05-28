@@ -29,8 +29,8 @@ Override with `--name foo` or `WORKENV_NAME=foo` in `.workenv`.
 ## Running two projects at once
 
 ```bash
-shellc ~/work/proj-a   # terminal 1: enters workenv-proj-a-<hash>
-shellc ~/work/proj-b   # terminal 2: enters workenv-proj-b-<hash>
+workenv shell ~/work/proj-a   # terminal 1: enters workenv-proj-a-<hash>
+workenv shell ~/work/proj-b   # terminal 2: enters workenv-proj-b-<hash>
 
 docker ps --format 'table {{.Names}}\t{{.Status}}'
 # workenv-proj-a-a1b2c3d4  Up 1 minute
@@ -41,7 +41,7 @@ docker ps --format 'table {{.Names}}\t{{.Status}}'
 
 | State                  | Shared? | Location                  |
 |------------------------|---------|---------------------------|
-| Plugins (Lazy/Mason)   | Yes     | Volume `data/nvim` |
+| Plugins (vim.pack/Mason) | Yes   | Volume `data/nvim` |
 | Treesitter parsers     | Yes     | Volume `data/nvim/site/parser` |
 | mise runtimes          | Yes     | Volume `data/mise`        |
 | TPM plugins            | Yes     | Volume `data/tmux`        |
@@ -54,10 +54,21 @@ docker ps --format 'table {{.Names}}\t{{.Status}}'
 ## Cleaning up
 
 ```bash
-workenv-stop --all       # stop all workenv-* containers
-workenv-clean            # remove stopped containers + dangling images
+workenv stop --all       # stop all workenv-* containers
+workenv clean            # remove stopped containers + dangling images
 docker volume rm workenv-root   # nuke shared state (factory reset)
 ```
+
+`workenv stop` accepts a project directory, an exact container name, or a
+basename **prefix**:
+
+```bash
+workenv stop ~/work/proj-a   # by project directory
+workenv stop proj            # prefix: stops every workenv-proj*… container
+workenv stop --strict proj-a-a1b2c3d4   # exact-name match only
+```
+
+Use `--strict` to force exact-name matching and skip prefix expansion.
 
 ## Runtime changes
 

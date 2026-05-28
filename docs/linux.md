@@ -32,8 +32,9 @@ sudo apt-get install socat wl-clipboard
 # sudo apt-get install socat xclip
 ```
 
-`shellc`, `tmuxc`, and `nvimc` auto-start `workenv-relay.sh` when `socat` is
-available. To run it persistently instead, use a systemd user unit.
+`workenv shell`, `workenv tmux`, and `workenv edit` auto-start
+`workenv-relay.sh` when `socat` is available. To run it persistently instead,
+use a systemd user unit.
 
 systemd user unit at `~/.config/systemd/user/workenv-relay.service`:
 

@@ -28,8 +28,8 @@ with `--env`, `WORKENV_ENV`, or `WORKENV_ENV_VARS`.
 Examples:
 
 ```bash
-shellc --env GITHUB_TOKEN ~/project
-shellc --env FOO=bar ~/project
+workenv shell --env GITHUB_TOKEN ~/project
+workenv shell --env FOO=bar ~/project
 ```
 
 Environment variables are visible to processes in the container. Do not pass
@@ -41,8 +41,22 @@ long-lived credentials into untrusted project containers.
 the container effective control over the host Docker daemon and should only be
 enabled for trusted projects.
 
+## Host relay
+
+The host relay's `open` command refuses URLs whose scheme is not in
+`WORKENV_RELAY_OPEN_SCHEMES` (a comma-separated allowlist, default
+`http,https,mailto`). Other schemes such as `file:` or `javascript:` are
+rejected, so a hostile project can't make the relay open arbitrary local files
+or run script URLs.
+
+The relay passes notify messages to the host notifier as a single argv element,
+so there is no shell interpolation of message content, and the relay shims
+reject newlines.
+
 ## Project Dockerfiles
 
 `.workenv/Dockerfile` is built with the project root as context. Add a project
 `.dockerignore` before copying large trees or sensitive local files into the
-build context.
+build context. The launcher warns once per project when the build context
+exceeds `WORKENV_DOCKERIGNORE_WARN_MB` MB (default `100`) and no `.dockerignore`
+is present.

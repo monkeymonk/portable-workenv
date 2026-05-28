@@ -7,9 +7,9 @@ docker logs workenv-<project>
 ```
 
 Common causes:
-- UID mismatch after swapping machines → `shellc --rebuild`
+- UID mismatch after swapping machines → `workenv shell --rebuild`
 - Volume missing → `docker volume create workenv-root`
-- Image missing → `WORKENV_IMAGE=workenv:latest shellc --rebuild`
+- Image missing → `WORKENV_IMAGE=workenv:latest workenv shell --rebuild`
 
 ## File ownership issues on host
 
@@ -18,7 +18,7 @@ Container writes files owned by a UID that doesn't match yours.
 Fix (Linux/WSL only):
 
 ```bash
-shellc --rebuild    # rebuilds with your current UID/GID
+workenv shell --rebuild    # rebuilds with your current UID/GID
 sudo chown -R "$USER:$USER" path/to/files
 ```
 
@@ -36,7 +36,7 @@ ssh-add -l
 Causes:
 - No agent running on host → `eval "$(ssh-agent -s)" && ssh-add`
 - `$SSH_AUTH_SOCK` unset when launcher was invoked → start a fresh shell
-- Fallback: `shellc --ssh-keys` to mount `~/.ssh` read-only
+- Fallback: `workenv shell --ssh-keys` to mount `~/.ssh` read-only
 
 ## Clipboard not working
 
@@ -50,7 +50,7 @@ Checklist:
    `ls -l "$XDG_RUNTIME_DIR/workenv-relay.sock"` on Linux/WSL, or
    `ls -l "$TMPDIR/workenv-relay.sock"` on macOS.
 3. Restart the project container after the socket exists so Docker can mount it:
-   `workenv-stop && shellc`.
+   `workenv stop && workenv shell`.
 4. In Neovim, `:lua print(vim.g.clipboard.name)` should print
    `workenv host relay`.
 
@@ -97,7 +97,7 @@ automatically when set on the host or in `~/.config/workenv/config`, including
 as Docker build args. You can also pass them explicitly:
 
 ```bash
-shellc --env HTTPS_PROXY=http://proxy.example ~/project
+workenv shell --env HTTPS_PROXY=http://proxy.example ~/project
 ```
 
 ## Slow startup
