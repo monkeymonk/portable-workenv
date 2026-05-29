@@ -91,7 +91,18 @@ local_install() {
   : > "$WORKENV_HOME/.workenv-local-install"
 }
 
+# True when WORKENV_BIN is the install's own bin/ (e.g. the user already puts
+# $WORKENV_HOME/bin on PATH and points WORKENV_BIN at it). Symlinking would be a
+# no-op (source == target), so we skip it.
+bin_is_install_dir() {
+  [[ -d "$WORKENV_BIN" && -d "$WORKENV_HOME/bin" && "$WORKENV_BIN" -ef "$WORKENV_HOME/bin" ]]
+}
+
 link_core_launchers() {
+  if bin_is_install_dir; then
+    log "$WORKENV_BIN is the install's own bin/ — launchers already there, skipping symlinks"
+    return 0
+  fi
   mkdir -p "$WORKENV_BIN"
   local tool
   for tool in "${CORE_LAUNCHERS[@]}"; do
@@ -102,6 +113,9 @@ link_core_launchers() {
 }
 
 maybe_link_legacy_aliases() {
+  if bin_is_install_dir; then
+    return 0  # aliases already live in WORKENV_BIN (= install bin/)
+  fi
   local already=0 tool
   for tool in "${LEGACY_LAUNCHERS[@]}"; do
     [[ -L "$WORKENV_BIN/$tool" ]] && already=$((already + 1))
@@ -152,7 +166,7 @@ write_path_block() {
   esac
   {
     printf '\n%s\n' "$MARKER_START"
-    printf '# Managed by workenv install.sh — uninstall with workenv-uninstall or remove this block.\n'
+    printf '# Managed by workenv install.sh — run uninstall.sh from your workenv install, or delete this block.\n'
     printf '%s\n' "$line"
     printf '%s\n' "$MARKER_END"
   } >> "$file"
